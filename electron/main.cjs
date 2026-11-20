@@ -11,7 +11,7 @@ function createWindow() {
     }
   });
 
-  // Note: Change 'dist' to 'build' if your project uses Create React App
+  // Change 'dist' to 'build' if your project uses Create React App
   win.loadFile(path.join(__dirname, '../dist/index.html'));
 }
 
