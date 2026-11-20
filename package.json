@@ -2,6 +2,7 @@
   "name": "framecrafter",
   "private": true,
   "version": "0.0.0",
+  "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
@@ -9,13 +10,21 @@
     "electron:build": "npm run build && electron-builder --win"
   },
   "dependencies": {
-    "...your existing dependencies..."
+    "lodash": "^4.17.21",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "...your existing devDependencies...": "...",
-    "...s": "^4.17.21",
+    "@types/lodash": "^4.17.21",
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
   },
   "build": {
     "appId": "com.framecrafter.app",
