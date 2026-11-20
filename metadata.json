@@ -1,0 +1,6 @@
+{
+  "name": "Framecraft — Visual App & UI Editor",
+  "description": "Load web project files, run a live interactive preview, and visually inspect, resize, style, and edit UI elements with two-way code sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
