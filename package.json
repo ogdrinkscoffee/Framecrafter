@@ -10,6 +10,7 @@
     "electron:build": "npm run build && electron-builder --win"
   },
   "dependencies": {
+    "jszip": "^3.10.2",
     "lodash": "^4.17.21",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
