@@ -33,5 +33,28 @@
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "@types/express": "^4.17.21"
+    {
+  "main": "electron/main.cjs",
+  "scripts": {
+    "electron:build": "npm run build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.yourname.yourapp",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*"
+    ],
+    "win": {
+      "target": "portable"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  }
+}
   }
 }
