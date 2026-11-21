@@ -1056,5 +1056,85 @@ export function replaceTextInHtmlBody(
   return { html: out, count: totalCount };
 }
 
+export function moveElementSiblingInHtml(
+  html: string,
+  veId: string,
+  direction: 'up' | 'down'
+): { html: string; moved: boolean; nextVeId: string | null } {
+  const elements = scanHtmlElements(html);
+  const escapedId = veId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const attrRegex = new RegExp(`\\bdata-ve-id\\s*=\\s*["']${escapedId}["']`, 'i');
+  const targetByAttr = elements.find((el) => attrRegex.test(html.slice(el.openStart, el.openEnd)));
+  const target = targetByAttr ?? elements.find((el) => el.veId === veId);
+  if (!target) return { html, moved: false, nextVeId: null };
+
+  // Find direct parent element containing target (smallest span enclosing target.openStart..closeEnd)
+  let parent: IndexedHtmlElement | null = null;
+  for (const el of elements) {
+    if (el === target) continue;
+    if (el.openEnd <= target.openStart && el.closeStart >= target.closeEnd) {
+      if (!parent || el.openStart > parent.openStart) {
+        parent = el;
+      }
+    }
+  }
+
+  // Direct children of parent (elements enclosed directly inside parent without another ancestor between them)
+  const parentOpenEnd = parent ? parent.openEnd : 0;
+  const parentCloseStart = parent ? parent.closeStart : html.length;
+  const siblings: IndexedHtmlElement[] = [];
+
+  for (const el of elements) {
+    if (el.openStart < parentOpenEnd || el.closeEnd > parentCloseStart) continue;
+    if (parent && el === parent) continue;
+    // Check if any other element encloses el strictly within parent
+    const hasIntermediateAncestor = elements.some(
+      (other) =>
+        other !== el &&
+        other !== parent &&
+        other.openStart >= parentOpenEnd &&
+        other.closeEnd <= parentCloseStart &&
+        other.openEnd <= el.openStart &&
+        other.closeStart >= el.closeEnd
+    );
+    if (!hasIntermediateAncestor) {
+      siblings.push(el);
+    }
+  }
+
+  const idx = siblings.indexOf(target);
+  if (idx === -1) return { html, moved: false, nextVeId: null };
+  const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= siblings.length) {
+    return { html, moved: false, nextVeId: null };
+  }
+
+  const first = idx < swapIdx ? siblings[idx] : siblings[swapIdx];
+  const second = idx < swapIdx ? siblings[swapIdx] : siblings[idx];
+
+  const firstRaw = html.slice(first.openStart, first.closeEnd);
+  const middleGap = html.slice(first.closeEnd, second.openStart);
+  const secondRaw = html.slice(second.openStart, second.closeEnd);
+
+  const nextHtml =
+    html.slice(0, first.openStart) +
+    secondRaw +
+    middleGap +
+    firstRaw +
+    html.slice(second.closeEnd);
+
+  const movedTargetOffset =
+    target === first ? first.openStart + secondRaw.length + middleGap.length : first.openStart;
+  const updatedElements = scanHtmlElements(nextHtml);
+  const movedEl = updatedElements.find((el) => el.openStart === movedTargetOffset);
+
+  return {
+    html: nextHtml,
+    moved: true,
+    nextVeId: movedEl ? movedEl.veId : null,
+  };
+}
+
+
 
 

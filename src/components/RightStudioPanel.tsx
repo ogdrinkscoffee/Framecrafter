@@ -1,6 +1,7 @@
 import React from 'react';
-import { Globe, Layers, Palette, SlidersHorizontal } from 'lucide-react';
+import { Globe, Layers, Palette, PanelRightClose, SlidersHorizontal } from 'lucide-react';
 import type {
+  DomTreeNode,
   DraggableComponentDef,
   ResponsiveScope,
   RightPanelTab,
@@ -14,9 +15,16 @@ import { SeoMetaPanel } from './SeoMetaPanel';
 import type { SvgShapeHtmlPatch } from '../utils/htmlSync';
 
 interface RightStudioPanelProps {
+  widthPx: number;
+  onCollapse: () => void;
   activeTab: RightPanelTab;
   onChangeTab: (tab: RightPanelTab) => void;
   selectedElement: SelectedElementInfo | null;
+  domTree: DomTreeNode[];
+  onSelectDomNode: (nodeId: string) => void;
+  onHoverDomNode: (nodeId: string | null) => void;
+  onViewInCode: () => void;
+  onHoverSpacing: (kind: 'margin' | 'padding' | null) => void;
   aspectRatioLocked: boolean;
   onToggleAspectRatioLock: (locked: boolean) => void;
   responsiveScope: ResponsiveScope;
@@ -59,9 +67,16 @@ interface RightStudioPanelProps {
 }
 
 export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
+  widthPx,
+  onCollapse,
   activeTab,
   onChangeTab,
   selectedElement,
+  domTree,
+  onSelectDomNode,
+  onHoverDomNode,
+  onViewInCode,
+  onHoverSpacing,
   aspectRatioLocked,
   onToggleAspectRatioLock,
   responsiveScope,
@@ -99,11 +114,15 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
   onDeleteRootVar,
 }) => {
   return (
-    <aside className="w-[380px] shrink-0 border-l border-slate-800/90 bg-[#0c111b] flex flex-col min-h-0">
-      {/* Segmented Right Panel Tabs */}
-      <div className="h-10 px-2.5 border-b border-slate-800/80 flex items-center shrink-0">
+    <aside
+      data-testid="right-sidebar"
+      style={{ width: `${widthPx}px` }}
+      className="shrink-0 border-l border-white/[0.08] bg-[#111114] flex flex-col min-h-0"
+    >
+      {/* Pill Segmented Right Panel Tabs + Collapse Button */}
+      <div className="h-10 px-2 border-b border-white/[0.08] flex items-center gap-1.5 shrink-0">
         <div
-          className="flex items-center gap-0.5 w-full p-0.5 rounded-md bg-[#090d16] border border-slate-800"
+          className="flex items-center justify-between gap-0.5 flex-1 min-w-0 p-0.5 rounded-full bg-[#09090b] border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden"
           role="tablist"
           aria-label="Right Studio Panel"
         >
@@ -112,13 +131,13 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
             role="tab"
             aria-selected={activeTab === 'inspector'}
             onClick={() => onChangeTab('inspector')}
-            className={`flex-1 inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+            className={`inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded-full text-[10.5px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'inspector'
-                ? 'bg-slate-800 text-slate-100'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                : 'text-zinc-400 hover:text-zinc-100'
             }`}
           >
-            <SlidersHorizontal className="w-3 h-3 shrink-0" />
+            <SlidersHorizontal className="w-3 h-3 shrink-0" strokeWidth={1.5} />
             Inspector
           </button>
           <button
@@ -126,13 +145,13 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
             role="tab"
             aria-selected={activeTab === 'elements'}
             onClick={() => onChangeTab('elements')}
-            className={`flex-1 inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+            className={`inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded-full text-[10.5px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'elements'
-                ? 'bg-slate-800 text-slate-100'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                : 'text-zinc-400 hover:text-zinc-100'
             }`}
           >
-            <Layers className="w-3 h-3 shrink-0" />
+            <Layers className="w-3 h-3 shrink-0" strokeWidth={1.5} />
             Elements
           </button>
           <button
@@ -140,13 +159,13 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
             role="tab"
             aria-selected={activeTab === 'seo'}
             onClick={() => onChangeTab('seo')}
-            className={`flex-1 inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+            className={`inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded-full text-[10.5px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'seo'
-                ? 'bg-slate-800 text-slate-100'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                : 'text-zinc-400 hover:text-zinc-100'
             }`}
           >
-            <Globe className="w-3 h-3 shrink-0" />
+            <Globe className="w-3 h-3 shrink-0" strokeWidth={1.5} />
             SEO &amp; Meta
           </button>
           <button
@@ -154,16 +173,25 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
             role="tab"
             aria-selected={activeTab === 'global-styles'}
             onClick={() => onChangeTab('global-styles')}
-            className={`flex-1 inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+            className={`inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded-full text-[10.5px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
               activeTab === 'global-styles'
-                ? 'bg-slate-800 text-slate-100'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                : 'text-zinc-400 hover:text-zinc-100'
             }`}
           >
-            <Palette className="w-3 h-3 shrink-0" />
+            <Palette className="w-3 h-3 shrink-0" strokeWidth={1.5} />
             Global Styles
           </button>
         </div>
+        <button
+          type="button"
+          onClick={onCollapse}
+          aria-label="Collapse Inspector sidebar"
+          title="Collapse Inspector (Ctrl+I)"
+          className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] transition-colors shrink-0 cursor-pointer"
+        >
+          <PanelRightClose className="w-3.5 h-3.5" strokeWidth={1.5} />
+        </button>
       </div>
 
       {activeTab === 'inspector' && (
@@ -195,12 +223,18 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
           onDuplicateElement={onDuplicateElement}
           onRemoveElement={onRemoveElement}
           onToggleVisibility={onToggleVisibility}
+          onViewInCode={onViewInCode}
+          onHoverSpacing={onHoverSpacing}
         />
       )}
 
       {activeTab === 'elements' && (
         <ElementsPalette
-          hasSelectedTarget={Boolean(selectedElement?.veId)}
+          hasSelectedTarget={Boolean(selectedElement?.veId || selectedElement?.runtimeId)}
+          domTree={domTree}
+          selectedNodeKey={selectedElement ? selectedElement.veId || selectedElement.runtimeId : null}
+          onSelectDomNode={onSelectDomNode}
+          onHoverDomNode={onHoverDomNode}
           onDragStartComponent={onDragStartComponent}
           onDragEndComponent={onDragEndComponent}
           onInsertComponent={onInsertComponent}

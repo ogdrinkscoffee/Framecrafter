@@ -24,6 +24,40 @@ export interface ElementRect {
   height: number;
 }
 
+export interface BoxSpacingSides {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export interface BoxModelMetrics {
+  margin: BoxSpacingSides;
+  padding: BoxSpacingSides;
+}
+
+export interface DomTreeNode {
+  nodeKey: string;
+  veId: string | null;
+  rtId: string | null;
+  tagName: string;
+  idAttr: string;
+  classPreview: string;
+  textPreview: string;
+  children: DomTreeNode[];
+}
+
+export type CanvasZoomMode = '50' | '75' | '100' | 'fit';
+
+export type QuickInsertKind =
+  | 'container'
+  | 'heading'
+  | 'paragraph'
+  | 'button'
+  | 'image'
+  | 'card'
+  | 'input';
+
 export interface SvgShapeProps {
   childTag: string;
   fill: string;
@@ -82,11 +116,13 @@ export interface SelectedElementInfo {
   actionType: string;
   actionValue: string;
   selectorPath: string;
+  uniqueSelector?: string;
   textContent: string;
   hasElementChildren: boolean;
   isTextEditable: boolean;
   isHidden: boolean;
   rect: ElementRect;
+  boxModel?: BoxModelMetrics;
   styles: ElementStyleSnapshot;
   inlineStyles: Record<string, string>;
 }

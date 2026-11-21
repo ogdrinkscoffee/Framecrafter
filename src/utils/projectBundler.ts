@@ -1,14 +1,155 @@
 import type { ProjectFile, ProjectFileType } from '../types/editor';
 import { tagHtmlWithVeIds } from './htmlSync';
 
+export const IGNORED_UPLOAD_SEGMENTS = new Set([
+  'node_modules',
+  '.git',
+  '.hg',
+  '.svn',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.vite',
+  '.cache',
+  'coverage',
+  '__macosx',
+  '.vscode',
+  '.idea',
+]);
+
+export const IGNORED_UPLOAD_FILES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini']);
+
+const TEST_OR_DOC_SEGMENTS = new Set([
+  'test',
+  'tests',
+  '__tests__',
+  'spec',
+  'specs',
+  'e2e',
+  'cypress',
+  'playwright',
+  'fixtures',
+  'mocks',
+  '__mocks__',
+  'docs',
+  'doc',
+  'examples',
+  'example',
+  'storybook-static',
+  '.storybook',
+]);
+
+const DOC_OR_META_ROOT_FILES = new Set([
+  'readme',
+  'readme.md',
+  'readme.txt',
+  'license',
+  'license.md',
+  'license.txt',
+  'changelog.md',
+  'contributing.md',
+  '.gitignore',
+  '.gitattributes',
+  '.editorconfig',
+  '.prettierrc',
+  '.prettierignore',
+  '.eslintignore',
+  '.npmrc',
+  '.nvmrc',
+  '.env',
+  '.env.example',
+  '.env.local',
+  'docker-compose.yml',
+  'docker-compose.yaml',
+  'dockerfile',
+  'makefile',
+  'vercel.json',
+  'netlify.toml',
+]);
+
+const NON_RUNTIME_EXACT_BASENAMES = new Set([
+  'server.ts',
+  'server.js',
+  'server.mjs',
+  'server.cjs',
+  'serverbundler.ts',
+  'vite.config.ts',
+  'vite.config.js',
+  'vite.config.mjs',
+  'vite.config.cjs',
+  'vitest.config.ts',
+  'vitest.config.js',
+  'vitest.config.mjs',
+  'jest.config.ts',
+  'jest.config.js',
+  'jest.config.cjs',
+  'webpack.config.ts',
+  'webpack.config.js',
+  'rollup.config.ts',
+  'rollup.config.js',
+  'tailwind.config.ts',
+  'tailwind.config.js',
+  'tailwind.config.cjs',
+  'postcss.config.ts',
+  'postcss.config.js',
+  'postcss.config.cjs',
+  'eslint.config.ts',
+  'eslint.config.js',
+  'eslint.config.mjs',
+  'prettier.config.js',
+  'next.config.ts',
+  'next.config.js',
+  'next.config.mjs',
+  'astro.config.mjs',
+  'package.json',
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'jsconfig.json',
+  'gradlew',
+  'gradlew.bat',
+  'proguard-rules.pro',
+  'local.properties',
+  'gradle.properties',
+  'build.gradle',
+  'build.gradle.kts',
+  'settings.gradle',
+  'settings.gradle.kts',
+  'androidmanifest.xml',
+]);
+
+export interface BundleErrorDetail {
+  file: string;
+  line: number | null;
+  column: number | null;
+  lineText: string;
+  message: string;
+}
+
+export interface CompiledProjectBundle {
+  js?: string;
+  css?: string;
+  replacedScriptSrcs?: string[];
+  hasInlineModuleReplacement?: boolean;
+  usesTailwind?: boolean;
+  importMap?: Record<string, string>;
+  error?: string;
+  errorDetails?: BundleErrorDetail[];
+}
+
 export function detectFileType(filename: string): ProjectFileType {
   const lower = filename.toLowerCase();
   if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html';
-  if (lower.endsWith('.css')) return 'css';
+  if (lower.endsWith('.css') || lower.endsWith('.scss') || lower.endsWith('.sass') || lower.endsWith('.less')) {
+    return 'css';
+  }
   if (
     lower.endsWith('.js') ||
     lower.endsWith('.mjs') ||
+    lower.endsWith('.cjs') ||
     lower.endsWith('.ts') ||
+    lower.endsWith('.mts') ||
+    lower.endsWith('.cts') ||
     lower.endsWith('.tsx') ||
     lower.endsWith('.jsx')
   ) {
@@ -36,67 +177,444 @@ export function normalizeRelativePath(rawPath: string): string {
   return stack.join('/');
 }
 
+export function shouldIgnoreUploadPath(rawPath: string): boolean {
+  const normalized = normalizeRelativePath(rawPath);
+  if (!normalized) return true;
+  const parts = normalized.split('/');
+  const filename = parts[parts.length - 1].toLowerCase();
+  if (IGNORED_UPLOAD_FILES.has(filename)) return true;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (IGNORED_UPLOAD_SEGMENTS.has(parts[i].toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const NON_RUNTIME_EXTENSION_RE =
+  /\.(xml|ya?ml|kt|kts|gradle|properties|pro|sh|bash|zsh|bat|ps1|md|markdown|apk|aab|jar|keystore|jks|java|swift|py|rb|go|rs|c|cpp|cc|h|hpp|lock|toml)$/i;
+
+const NON_RUNTIME_SEGMENTS = new Set([
+  'test',
+  'tests',
+  '__tests__',
+  'spec',
+  'specs',
+  'e2e',
+  'cypress',
+  'playwright',
+  '__mocks__',
+  'android',
+  'android-kiosk-launcher',
+  'ios',
+  'pods',
+  '.gradle',
+  'gradle',
+  '.github',
+]);
+
+export function isNonRuntimeBundleFile(rawPath: string): boolean {
+  const normalized = normalizeRelativePath(rawPath);
+  if (!normalized) return true;
+  const lower = normalized.toLowerCase();
+  const parts = lower.split('/');
+  const base = parts[parts.length - 1];
+
+  if (shouldIgnoreUploadPath(normalized)) return true;
+  if (NON_RUNTIME_EXACT_BASENAMES.has(base)) return true;
+  if (/^tsconfig(\..+)?\.json$/i.test(base)) return true;
+  if (/\.(test|spec)\.[cm]?[jt]sx?$/i.test(base)) return true;
+  if (NON_RUNTIME_EXTENSION_RE.test(base)) return true;
+
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (NON_RUNTIME_SEGMENTS.has(parts[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isDocOrMetaFilename(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  if (DOC_OR_META_ROOT_FILES.has(lower)) return true;
+  if (lower.endsWith('.md') || lower.endsWith('.lock') || lower === 'package-lock.json' || lower === 'yarn.lock' || lower === 'pnpm-lock.yaml') {
+    return true;
+  }
+  return false;
+}
+
+function getDirname(filePath: string): string {
+  const idx = filePath.lastIndexOf('/');
+  return idx === -1 ? '' : filePath.slice(0, idx);
+}
+
+function isUnderTestOrDocs(filePath: string): boolean {
+  const parts = filePath.toLowerCase().split('/');
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (TEST_OR_DOC_SEGMENTS.has(parts[i])) return true;
+  }
+  return false;
+}
+
+function findDetectedSubRootPrefix(paths: string[]): string {
+  const hasRootIndex = paths.some((p) => p.toLowerCase() === 'index.html');
+  const hasRootPublicIndex = paths.some((p) => p.toLowerCase() === 'public/index.html');
+  const hasRootPkg = paths.some((p) => p.toLowerCase() === 'package.json');
+  const hasRootSrc = paths.some((p) => p.toLowerCase().startsWith('src/'));
+
+  if (hasRootIndex || hasRootPublicIndex || (hasRootPkg && hasRootSrc)) {
+    return '';
+  }
+
+  const candidateDirs = new Set<string>();
+  const pathSet = new Set(paths.map((p) => p.toLowerCase()));
+
+  for (const p of paths) {
+    const lower = p.toLowerCase();
+    if (isUnderTestOrDocs(lower)) continue;
+    const base = lower.split('/').pop() ?? lower;
+    const dir = getDirname(p);
+    if (!dir) continue;
+
+    if (base === 'index.html' || base === 'index.htm') {
+      const dirParts = dir.split('/');
+      const lastSeg = dirParts[dirParts.length - 1].toLowerCase();
+      if (lastSeg === 'public') {
+        const parentDir = dirParts.slice(0, -1).join('/');
+        const prefix = parentDir ? `${parentDir.toLowerCase()}/` : '';
+        const hasSiblingSrcOrPkg = paths.some((other) => {
+          const ol = other.toLowerCase();
+          return (
+            ol.startsWith(`${prefix}src/`) ||
+            ol === `${prefix}package.json`
+          );
+        });
+        if (hasSiblingSrcOrPkg) {
+          if (parentDir) candidateDirs.add(parentDir);
+          continue;
+        }
+      }
+      candidateDirs.add(dir);
+    } else if (base === 'package.json') {
+      const prefix = `${dir.toLowerCase()}/`;
+      const hasHtmlOrSrc = paths.some((other) => {
+        const ol = other.toLowerCase();
+        return ol === `${prefix}index.html` || ol === `${prefix}public/index.html` || ol.startsWith(`${prefix}src/`);
+      });
+      if (hasHtmlOrSrc) candidateDirs.add(dir);
+    }
+  }
+
+  if (candidateDirs.size === 0) return '';
+
+  let bestCandidate = '';
+  let bestScore = -Infinity;
+
+  for (const dir of candidateDirs) {
+    const prefix = `${dir}/`;
+    const prefixLower = prefix.toLowerCase();
+    const inside = paths.filter((p) => p.toLowerCase().startsWith(prefixLower));
+    const outside = paths.filter((p) => !p.toLowerCase().startsWith(prefixLower));
+
+    const outsideHasCodeOrHtml = outside.some((p) => {
+      if (isUnderTestOrDocs(p)) return false;
+      const base = p.split('/').pop() ?? p;
+      if (isDocOrMetaFilename(base)) return false;
+      const type = detectFileType(base);
+      if (type === 'html' || type === 'css' || type === 'js') return true;
+      return /\.(kt|kts|gradle|xml|java|swift|py|go|rs|apk|sh)$/i.test(base);
+    });
+
+    if (outsideHasCodeOrHtml) continue;
+
+    let score = 0;
+    const rels = inside.map((p) => p.slice(prefix.length).toLowerCase());
+    if (rels.includes('index.html')) score += 100;
+    if (rels.includes('public/index.html')) score += 85;
+    if (rels.includes('package.json')) score += 40;
+    if (rels.some((r) => r.startsWith('src/'))) score += 30;
+    if (pathSet.has(`${prefixLower}styles.css`) || rels.some((r) => r.endsWith('.css'))) score += 15;
+    const lastSeg = dir.split('/').pop()?.toLowerCase() ?? '';
+    if (lastSeg === 'dist' || lastSeg === 'build' || lastSeg === 'out') score -= 45;
+    score -= dir.split('/').length * 5;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestCandidate = dir;
+    }
+  }
+
+  return bestCandidate;
+}
+
 export function normalizeUploadedFiles(
   rawFiles: Array<{ path: string; name: string; content: string }>
 ): ProjectFile[] {
   if (rawFiles.length === 0) return [];
 
-  // Strip shared top-level folder prefix if all files come from a single folder upload
-  const splitPaths = rawFiles.map((f) => normalizeRelativePath(f.path || f.name).split('/'));
-  const firstSegment = splitPaths[0][0];
-  const hasSharedRootFolder =
-    splitPaths.every((parts) => parts.length > 1 && parts[0] === firstSegment);
+  const nonIgnored = rawFiles.filter((f) => !shouldIgnoreUploadPath(f.path || f.name));
+  const sourceEntries = nonIgnored.length > 0 ? nonIgnored : rawFiles;
 
-  const normalized = rawFiles.map((f, index) => {
-    const parts = splitPaths[index];
-    const relPath = hasSharedRootFolder ? parts.slice(1).join('/') : parts.join('/');
-    return {
-      path: relPath || f.name,
-      name: f.name,
+  let working = sourceEntries.map((f) => ({
+    path: normalizeRelativePath(f.path || f.name) || normalizeRelativePath(f.name),
+    name: f.name,
+    content: f.content,
+  }));
+
+  while (working.length > 0) {
+    const splitPaths = working.map((f) => f.path.split('/').filter(Boolean));
+    const first = splitPaths[0]?.[0];
+    if (!first) break;
+    const allShareFirst = splitPaths.every((parts) => parts.length > 1 && parts[0] === first);
+    if (!allShareFirst) break;
+    working = working.map((f, idx) => ({
+      ...f,
+      path: splitPaths[idx].slice(1).join('/'),
+    }));
+  }
+
+  const subRoot = findDetectedSubRootPrefix(working.map((f) => f.path));
+  if (subRoot) {
+    const prefix = `${subRoot}/`;
+    const prefixLower = prefix.toLowerCase();
+    const filtered = working.filter((f) => f.path.toLowerCase().startsWith(prefixLower));
+    if (filtered.length > 0) {
+      working = filtered.map((f) => ({
+        ...f,
+        path: f.path.slice(prefix.length),
+      }));
+    }
+  }
+
+  const deduped = new Map<string, ProjectFile>();
+  for (const f of working) {
+    const finalPath = f.path || f.name;
+    const finalName = finalPath.split('/').pop() || f.name;
+    deduped.set(finalPath, {
+      path: finalPath,
+      name: finalName,
       content: f.content,
-      type: detectFileType(f.name),
-    };
-  });
+      type: detectFileType(finalName),
+    });
+  }
 
-  return normalized.sort((a, b) => a.path.localeCompare(b.path));
+  return Array.from(deduped.values()).sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function detectProjectTitleFromUpload(
+  rawFiles: Array<{ path: string; name: string; content: string }>,
+  normalizedFiles: ProjectFile[]
+): string | null {
+  const pkg = normalizedFiles.find((f) => f.path.toLowerCase() === 'package.json');
+  if (pkg) {
+    try {
+      const parsed = JSON.parse(pkg.content) as { name?: unknown };
+      if (typeof parsed.name === 'string' && parsed.name.trim()) {
+        return parsed.name.trim();
+      }
+    } catch {
+      // Ignore malformed package.json
+    }
+  }
+  for (const f of rawFiles) {
+    const norm = normalizeRelativePath(f.path || f.name);
+    if (norm.includes('/')) {
+      return norm.split('/')[0];
+    }
+  }
+  return null;
 }
 
 export function findEntryHtmlPath(files: ProjectFile[]): string | null {
   const htmlFiles = files.filter((f) => f.type === 'html');
   if (htmlFiles.length === 0) return null;
 
-  const rootIndex = htmlFiles.find((f) => f.path.toLowerCase() === 'index.html');
-  if (rootIndex) return rootIndex.path;
+  const scoreHtmlFile = (file: ProjectFile): number => {
+    const lower = file.path.toLowerCase();
+    const name = file.name.toLowerCase();
+    const depth = lower.split('/').length - 1;
+    let score = 0;
 
-  const nestedIndex = htmlFiles.find((f) => f.name.toLowerCase() === 'index.html');
-  if (nestedIndex) return nestedIndex.path;
+    if (lower === 'index.html' || lower === 'index.htm') return 10000;
+    if (lower === 'public/index.html') score += 8000;
+    else if (lower === 'src/index.html' || lower === 'app/index.html') score += 7500;
+    else if (name === 'index.html' || name === 'index.htm') score += 6000;
+    else if (name === 'main.html' || name === 'app.html' || name === 'home.html') score += 3000;
+    else score += 1000;
 
-  return htmlFiles[0].path;
+    if (isUnderTestOrDocs(lower)) score -= 5000;
+    if (/^(dist|build|out)\//.test(lower)) score -= 1500;
+    score -= depth * 120;
+    return score;
+  };
+
+  const ranked = [...htmlFiles].sort((a, b) => {
+    const diff = scoreHtmlFile(b) - scoreHtmlFile(a);
+    return diff !== 0 ? diff : a.path.localeCompare(b.path);
+  });
+
+  return ranked[0].path;
 }
 
-function resolveRelativeToEntry(entryPath: string, refPath: string): string {
+export function resolveRelativeToEntry(entryPath: string, refPath: string): string {
+  const cleanRef = refPath.split('?')[0].split('#')[0].replace(/%PUBLIC_URL%/g, '');
+  if (cleanRef.startsWith('/')) {
+    return normalizeRelativePath(cleanRef);
+  }
   const entryDir = entryPath.includes('/')
     ? entryPath.slice(0, entryPath.lastIndexOf('/') + 1)
     : '';
-  return normalizeRelativePath(entryDir + refPath);
+  return normalizeRelativePath(entryDir + cleanRef);
 }
 
-function buildVirtualFetchShim(files: ProjectFile[], entryPath: string): string {
-  const fileMap: Record<string, string> = {};
-  for (const file of files) {
-    fileMap[file.path] = file.content;
-    fileMap['./' + file.path] = file.content;
-    fileMap['/' + file.path] = file.content;
+export interface ParsedHtmlScripts {
+  moduleSrcs: Array<{ rawSrc: string; resolvedPath: string | null }>;
+  inlineModules: string[];
+}
+
+export function extractScriptsFromHtml(
+  html: string,
+  entryPath: string,
+  files: ProjectFile[]
+): ParsedHtmlScripts {
+  const fileSet = new Set(files.map((f) => f.path));
+  const entryDir = getDirname(entryPath);
+  const moduleSrcs: Array<{ rawSrc: string; resolvedPath: string | null }> = [];
+  const inlineModules: string[] = [];
+
+  const findResolved = (rawSrc: string): string | null => {
+    const clean = rawSrc.split('?')[0].split('#')[0].replace(/%PUBLIC_URL%/g, '');
+    const candidates = clean.startsWith('/')
+      ? [normalizeRelativePath(clean), normalizeRelativePath((entryDir ? `${entryDir}/` : '') + clean.slice(1))]
+      : [normalizeRelativePath((entryDir ? `${entryDir}/` : '') + clean), normalizeRelativePath(clean)];
+    for (const c of candidates) {
+      if (fileSet.has(c) && !isNonRuntimeBundleFile(c)) {
+        return c;
+      }
+    }
+    return null;
+  };
+
+  if (typeof DOMParser !== 'undefined') {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const scripts = Array.from(doc.querySelectorAll('script'));
+    for (const script of scripts) {
+      const src = script.getAttribute('src');
+      const type = (script.getAttribute('type') || '').toLowerCase();
+      const isModule = type === 'module';
+      if (src) {
+        if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) continue;
+        const resolved = findResolved(src);
+        if (resolved && (isModule || /\.(tsx?|jsx|mjs|mts|cts)(\?.*)?$/i.test(src))) {
+          moduleSrcs.push({ rawSrc: src, resolvedPath: resolved });
+        } else if (resolved) {
+          const fileObj = files.find((f) => f.path === resolved);
+          if (fileObj && /\b(import|export)\s/m.test(fileObj.content)) {
+            moduleSrcs.push({ rawSrc: src, resolvedPath: resolved });
+          }
+        }
+      } else if (isModule && (script.textContent || '').trim()) {
+        inlineModules.push(script.textContent || '');
+      }
+    }
+    return { moduleSrcs, inlineModules };
   }
-  const serializedMap = JSON.stringify(fileMap)
+
+  const scriptTagRegex = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = scriptTagRegex.exec(html)) !== null) {
+    const attrs = match[1] || '';
+    const body = match[2] || '';
+    const srcMatch = /\bsrc=["']([^"']+)["']/i.exec(attrs);
+    const typeMatch = /\btype=["']([^"']+)["']/i.exec(attrs);
+    const isModule = typeMatch?.[1]?.toLowerCase() === 'module';
+    if (srcMatch) {
+      const src = srcMatch[1];
+      if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) continue;
+      const resolved = findResolved(src);
+      if (resolved && (isModule || /\.(tsx?|jsx|mjs|mts|cts)(\?.*)?$/i.test(src))) {
+        moduleSrcs.push({ rawSrc: src, resolvedPath: resolved });
+      } else if (resolved) {
+        const fileObj = files.find((f) => f.path === resolved);
+        if (fileObj && /\b(import|export)\s/m.test(fileObj.content)) {
+          moduleSrcs.push({ rawSrc: src, resolvedPath: resolved });
+        }
+      }
+    } else if (isModule && body.trim()) {
+      inlineModules.push(body);
+    }
+  }
+
+  return { moduleSrcs, inlineModules };
+}
+
+export function needsModuleBundling(files: ProjectFile[], entryPath: string | null): boolean {
+  if (!entryPath) return false;
+  const entryFile = files.find((f) => f.path === entryPath);
+  if (!entryFile) return false;
+
+  const parsed = extractScriptsFromHtml(entryFile.content, entryPath, files);
+  if (parsed.moduleSrcs.length > 0 || parsed.inlineModules.length > 0) {
+    return true;
+  }
+
+  const lowerEntry = entryPath.toLowerCase();
+  const hasRootContainer =
+    /id=["'](root|app)["']/i.test(entryFile.content) || lowerEntry === 'public/index.html';
+  if (hasRootContainer) {
+    const hasSpaEntry = files.some((f) => {
+      if (isNonRuntimeBundleFile(f.path)) return false;
+      const lp = f.path.toLowerCase();
+      return (
+        lp === 'src/main.tsx' ||
+        lp === 'src/main.ts' ||
+        lp === 'src/main.jsx' ||
+        lp === 'src/main.js' ||
+        lp === 'src/index.tsx' ||
+        lp === 'src/index.ts' ||
+        lp === 'src/index.jsx' ||
+        lp === 'src/index.js'
+      );
+    });
+    if (hasSpaEntry) return true;
+  }
+
+  const usesTailwindCss = files.some(
+    (f) =>
+      f.type === 'css' &&
+      !isNonRuntimeBundleFile(f.path) &&
+      (/@import\s+["']tailwindcss["']/.test(f.content) ||
+        /@tailwind\s+(base|components|utilities)/.test(f.content))
+  );
+  return usesTailwindCss;
+}
+
+function escapeJsonForScriptTag(jsonText: string): string {
+  return jsonText
     .replace(/</g, '\\u003c')
     .replace(/>/g, '\\u003e')
     .replace(/&/g, '\\u0026')
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029');
-  const serializedEntry = JSON.stringify(entryPath)
-    .replace(/</g, '\\u003c')
-    .replace(/>/g, '\\u003e');
+}
+
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildVirtualFetchShim(files: ProjectFile[], entryPath: string): string {
+  const fileMap: Record<string, string> = {};
+  for (const file of files) {
+    if (isNonRuntimeBundleFile(file.path) && file.path.toLowerCase() !== 'package.json') continue;
+    fileMap[file.path] = file.content;
+    fileMap['./' + file.path] = file.content;
+    fileMap['/' + file.path] = file.content;
+  }
+  const serializedMap = escapeJsonForScriptTag(JSON.stringify(fileMap));
+  const serializedEntry = escapeJsonForScriptTag(JSON.stringify(entryPath));
 
   return `<script data-ve-internal="virtual-fetch">
 (function() {
@@ -125,10 +643,91 @@ function buildVirtualFetchShim(files: ProjectFile[], entryPath: string): string 
 </script>`;
 }
 
+function buildRuntimeErrorGuard(): string {
+  return `<script data-ve-internal="error-guard">
+(function() {
+  var shown = false;
+  function renderErrorBanner(title, detail) {
+    if (shown) return;
+    var root = document.getElementById('root') || document.getElementById('app');
+    var rootEmpty = !root || root.innerHTML.trim() === '';
+    var bodyText = document.body ? document.body.innerText.trim() : '';
+    if (!rootEmpty && bodyText.length > 0) return;
+    shown = true;
+    var box = document.createElement('div');
+    box.setAttribute('data-ve-internal', 'error-banner');
+    box.style.cssText = 'position:fixed;inset:16px;z-index:2147483646;overflow:auto;background:#0b1120;color:#e2e8f0;border:1px solid #ef4444;border-radius:12px;padding:20px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;box-shadow:0 20px 50px rgba(0,0,0,0.45);';
+    var h = document.createElement('div');
+    h.style.cssText = 'color:#f87171;font-weight:700;font-size:14px;margin-bottom:8px;font-family:system-ui,sans-serif;';
+    h.textContent = title;
+    var p = document.createElement('pre');
+    p.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-word;color:#cbd5e1;';
+    p.textContent = detail;
+    box.appendChild(h);
+    box.appendChild(p);
+    if (document.body) document.body.appendChild(box);
+  }
+  window.addEventListener('error', function(ev) {
+    var loc = ev && ev.filename ? ('\\nFile: ' + ev.filename + (ev.lineno ? ':' + ev.lineno + ':' + (ev.colno || 0) : '')) : '';
+    renderErrorBanner('App Runtime Error', ((ev && ev.message) ? ev.message : String(ev)) + loc);
+  });
+  window.addEventListener('unhandledrejection', function(ev) {
+    var reason = ev && ev.reason ? (ev.reason.stack || ev.reason.message || String(ev.reason)) : 'Unhandled promise rejection';
+    renderErrorBanner('App Async Error', reason);
+  });
+})();
+</script>`;
+}
+
+function buildBlobModuleLoaderMarkup(compiledJs: string): string {
+  const safeJson = escapeJsonForScriptTag(JSON.stringify({ js: compiledJs }));
+  return `<script type="application/json" id="__ve_bundle_payload__" data-ve-internal="bundle-payload">${safeJson}</script>
+<script data-ve-internal="blob-loader">
+(function() {
+  var payloadEl = document.getElementById('__ve_bundle_payload__');
+  if (!payloadEl) return;
+  try {
+    var payload = JSON.parse(payloadEl.textContent || '{}');
+    if (!payload.js) return;
+    var blob = new Blob([payload.js], { type: 'text/javascript' });
+    var blobUrl = URL.createObjectURL(blob);
+    var scriptEl = document.createElement('script');
+    scriptEl.type = 'module';
+    scriptEl.setAttribute('data-ve-bundled', 'true');
+    scriptEl.src = blobUrl;
+    scriptEl.onerror = function() {
+      window.dispatchEvent(new ErrorEvent('error', { message: 'Failed to execute bundled Blob module script' }));
+    };
+    document.body.appendChild(scriptEl);
+  } catch (err) {
+    window.dispatchEvent(new ErrorEvent('error', { message: err && err.message ? err.message : String(err) }));
+  }
+})();
+</script>`;
+}
+
+function buildCompileErrorOverlay(compiledBundle: CompiledProjectBundle): string {
+  const details = compiledBundle.errorDetails ?? [];
+  const formattedDetails =
+    details.length > 0
+      ? details
+          .map((d) => {
+            const loc = d.line !== null ? `Line ${d.line}${d.column !== null ? `:${d.column}` : ''}` : '';
+            const header = [d.file || 'Unknown file', loc].filter(Boolean).join(' · ');
+            const frame = d.lineText ? `\n  > ${d.lineText}` : '';
+            return `${header}\n  ${d.message}${frame}`;
+          })
+          .join('\n\n')
+      : compiledBundle.error || 'Unknown bundling error';
+
+  return `<div data-ve-internal="bundle-error" style="position:fixed;inset:16px;z-index:2147483646;overflow:auto;background:#0b1120;color:#e2e8f0;border:1px solid #ef4444;border-radius:12px;padding:20px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.55;box-shadow:0 20px 50px rgba(0,0,0,0.45);"><div style="color:#f87171;font-weight:700;font-size:14px;margin-bottom:10px;font-family:system-ui,sans-serif;">Project Build Error</div><pre style="margin:0;white-space:pre-wrap;word-break:break-word;color:#f1f5f9;">${escapeHtmlText(formattedDetails)}</pre></div>`;
+}
+
 export function buildSrcDoc(
   files: ProjectFile[],
   entryPath: string,
-  bridgeMarkup = ''
+  bridgeMarkup = '',
+  compiledBundle?: CompiledProjectBundle | null
 ): string {
   const entryFile = files.find((f) => f.path === entryPath);
   if (!entryFile) {
@@ -140,7 +739,12 @@ export function buildSrcDoc(
     fileLookup.set(file.path, file);
   }
 
-  let html = tagHtmlWithVeIds(entryFile.content);
+  let html = tagHtmlWithVeIds(entryFile.content).replace(/%PUBLIC_URL%\//g, '/').replace(/%PUBLIC_URL%/g, '');
+
+  const stripTailwindDirectives = (cssText: string): string =>
+    cssText
+      .replace(/@import\s+["']tailwindcss["']\s*;?/gi, '')
+      .replace(/@tailwind\s+(base|components|utilities)\s*;?/gi, '');
 
   // Inline local <link rel="stylesheet" href="...">
   html = html.replace(
@@ -156,38 +760,158 @@ export function buildSrcDoc(
       const resolved = resolveRelativeToEntry(entryPath, href);
       const cssFile = fileLookup.get(resolved) ?? fileLookup.get(normalizeRelativePath(href));
       if (!cssFile) return fullMatch;
-      return `<style data-ve-source="${cssFile.path}">\n${cssFile.content}\n</style>`;
+      const cssContent = compiledBundle?.usesTailwind
+        ? stripTailwindDirectives(cssFile.content)
+        : cssFile.content;
+      const safeCss = cssContent.replace(/<\/style>/gi, '<\\/style>');
+      return `<style data-ve-source="${cssFile.path}">\n${safeCss}\n</style>`;
     }
   );
 
-  // Inline local <script src="..."></script>
+  // Handle script tags cleanly: remove bundled entry scripts (they run safely via Blob URL below),
+  // and embed unbundled classic local scripts safely.
+  const replacedSet = new Set(
+    (compiledBundle?.replacedScriptSrcs ?? []).map((s) => s.trim())
+  );
+  const inlineModuleQueue = new Set(
+    compiledBundle?.hasInlineModuleReplacement ? ['__inline_module__'] : []
+  );
+
   html = html.replace(
-    /<script\b([^>]*?)\bsrc=["']([^"']+)["']([^>]*?)>\s*<\/script>/gi,
-    (fullMatch, _before, src) => {
-      if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) {
-        return fullMatch;
+    /<script\b([^>]*)>([\s\S]*?)<\/script>/gi,
+    (fullMatch, attrs: string, body: string) => {
+      const srcMatch = /\bsrc=["']([^"']+)["']/i.exec(attrs);
+      const isModuleType = /\btype=["']module["']/i.test(attrs);
+
+      if (srcMatch) {
+        const src = srcMatch[1];
+        if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) {
+          return fullMatch;
+        }
+        const resolved = resolveRelativeToEntry(entryPath, src);
+        const normSrc = normalizeRelativePath(src);
+        if (
+          compiledBundle &&
+          (replacedSet.has(src) ||
+            replacedSet.has(resolved) ||
+            replacedSet.has(normSrc) ||
+            compiledBundle.js !== undefined ||
+            compiledBundle.error !== undefined)
+        ) {
+          return '';
+        }
+
+        if (/\.(tsx?|jsx|mts|cts)(\?.*)?$/i.test(src)) {
+          return '';
+        }
+
+        const jsFile = fileLookup.get(resolved) ?? fileLookup.get(normSrc);
+        if (!jsFile || isNonRuntimeBundleFile(jsFile.path)) {
+          return '';
+        }
+        const safeJs = jsFile.content.replace(/<\/script>/gi, '<\\/script>');
+        return `<script${isModuleType ? ' type="module"' : ''} data-ve-source="${jsFile.path}">\n${safeJs}\n</script>`;
       }
-      const resolved = resolveRelativeToEntry(entryPath, src);
-      const jsFile = fileLookup.get(resolved) ?? fileLookup.get(normalizeRelativePath(src));
-      if (!jsFile) return fullMatch;
-      const safeJs = jsFile.content.replace(/<\/script>/gi, '<\\/script>');
-      return `<script data-ve-source="${jsFile.path}">\n${safeJs}\n</script>`;
+
+      if (
+        compiledBundle &&
+        inlineModuleQueue.has('__inline_module__') &&
+        isModuleType &&
+        body.trim()
+      ) {
+        return '';
+      }
+
+      return fullMatch;
     }
   );
 
-  const virtualFetchShim = buildVirtualFetchShim(files, entryPath);
+  // Build <head> injections with <script type="importmap"> FIRST before any module script
+  const headInjections: string[] = [];
+  if (compiledBundle?.importMap && Object.keys(compiledBundle.importMap).length > 0) {
+    const mapJson = escapeJsonForScriptTag(JSON.stringify({ imports: compiledBundle.importMap }));
+    headInjections.push(`<script type="importmap" data-ve-internal="importmap">${mapJson}</script>`);
+  }
 
+  headInjections.push(buildVirtualFetchShim(files, entryPath));
+  headInjections.push(buildRuntimeErrorGuard());
+
+  if (compiledBundle?.usesTailwind && !/cdn\.tailwindcss\.com/i.test(html)) {
+    headInjections.push(`<script src="https://cdn.tailwindcss.com" data-ve-internal="tailwind-cdn"></script>`);
+  }
+
+  if (compiledBundle?.css) {
+    const cleanedCss = compiledBundle.usesTailwind
+      ? stripTailwindDirectives(compiledBundle.css)
+      : compiledBundle.css;
+    if (cleanedCss.trim()) {
+      const safeCss = cleanedCss.replace(/<\/style>/gi, '<\\/style>');
+      headInjections.push(`<style data-ve-bundled="true">\n${safeCss}\n</style>`);
+    }
+  }
+
+  // Inject visual override CSS if present in project files (persists restyles on React DOM)
+  const visualOverrideCss =
+    fileLookup.get('src/framecraft-edits.css') ?? fileLookup.get('framecraft-edits.css');
+  if (visualOverrideCss && visualOverrideCss.content.trim()) {
+    const safeOverrideCss = visualOverrideCss.content.replace(/<\/style>/gi, '<\\/style>');
+    headInjections.push(
+      `<style data-ve-internal="visual-overrides" data-ve-source="${visualOverrideCss.path}">\n${safeOverrideCss}\n</style>`
+    );
+  }
+
+  const headBlock = headInjections.join('\n');
   if (/<head\b[^>]*>/i.test(html)) {
-    html = html.replace(/<head\b[^>]*>/i, (m) => `${m}\n${virtualFetchShim}`);
+    html = html.replace(/<head\b[^>]*>/i, (m) => `${m}\n${headBlock}`);
   } else {
-    html = `${virtualFetchShim}\n${html}`;
+    html = `${headBlock}\n${html}`;
+  }
+
+  // Inject compiled JS safely via JSON payload -> Blob URL inside <body>
+  const bodyInjections: string[] = [];
+  if (compiledBundle?.js) {
+    bodyInjections.push(buildBlobModuleLoaderMarkup(compiledBundle.js));
+  }
+
+  // Inject visual text/removal overrides if present in project files
+  const visualOverrideJs =
+    fileLookup.get('src/framecraft-edits.js') ?? fileLookup.get('framecraft-edits.js');
+  if (visualOverrideJs && visualOverrideJs.content.trim()) {
+    const safeJson = escapeJsonForScriptTag(JSON.stringify({ js: visualOverrideJs.content }));
+    bodyInjections.push(
+      `<script type="application/json" id="__ve_edits_payload__" data-ve-internal="edits-payload">${safeJson}</script>
+<script data-ve-internal="edits-loader">
+(function() {
+  var el = document.getElementById('__ve_edits_payload__');
+  if (!el) return;
+  try {
+    var d = JSON.parse(el.textContent || '{}');
+    if (d.js) {
+      var u = URL.createObjectURL(new Blob([d.js], { type: 'text/javascript' }));
+      var s = document.createElement('script');
+      s.src = u;
+      document.body.appendChild(s);
+    }
+  } catch (e) {}
+})();
+</script>`
+    );
+  }
+
+  if (compiledBundle?.error || (compiledBundle?.errorDetails && compiledBundle.errorDetails.length > 0)) {
+    bodyInjections.push(buildCompileErrorOverlay(compiledBundle));
   }
 
   if (bridgeMarkup) {
+    bodyInjections.push(bridgeMarkup);
+  }
+
+  if (bodyInjections.length > 0) {
+    const bodyBlock = bodyInjections.join('\n');
     if (/<\/body>/i.test(html)) {
-      html = html.replace(/<\/body>/i, `${bridgeMarkup}\n</body>`);
+      html = html.replace(/<\/body>/i, `${bodyBlock}\n</body>`);
     } else {
-      html = `${html}\n${bridgeMarkup}`;
+      html = `${html}\n${bodyBlock}`;
     }
   }
 

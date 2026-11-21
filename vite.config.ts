@@ -26,12 +26,18 @@ export default defineConfig(() => {
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, {recursive: true, force: true});
           }
+          const esbuildWasmSrc = path.resolve(__dirname, 'node_modules/esbuild-wasm/esbuild.wasm');
+          const esbuildWasmDest = path.resolve(distDir, 'esbuild.wasm');
+          if (fs.existsSync(distDir) && fs.existsSync(esbuildWasmSrc)) {
+            fs.copyFileSync(esbuildWasmSrc, esbuildWasmDest);
+          }
         },
       },
     ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        'esbuild-wasm': path.resolve(__dirname, 'node_modules/esbuild-wasm/esm/browser.js'),
       },
     },
     server: {

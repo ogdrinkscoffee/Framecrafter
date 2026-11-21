@@ -13,6 +13,7 @@ import {
   getTableMetricsInHtml,
   insertHtmlSnippet,
   listHtmlElementIds,
+  moveElementSiblingInHtml,
   parseInlineStyleString,
   removeLastTableColumnInHtml,
   removeLastTableRowInHtml,
@@ -33,9 +34,19 @@ import {
 import {
   buildSrcDoc,
   detectFileType,
+  detectProjectTitleFromUpload,
   findEntryHtmlPath,
+  isNonRuntimeBundleFile,
+  needsModuleBundling,
   normalizeUploadedFiles,
+  shouldIgnoreUploadPath,
 } from './projectBundler';
+import { bundleProjectInBrowser } from './browserBundler';
+import { buildProjectFileTree, getFileBadgeStyle } from './fileTree';
+import {
+  applyRuntimeStylePatchToFiles,
+  applyRuntimeTextPatchToFiles,
+} from './reactVisualSync';
 import { SAMPLE_TEMPLATES } from './sampleTemplates';
 import { searchProjectFiles } from './fileSearch';
 import { DRAGGABLE_COMPONENTS, SVG_SHAPE_TOOL_ITEMS } from './componentCatalog';
@@ -52,6 +63,13 @@ import {
   updateRootCssVariable,
 } from './cssVariables';
 import { buildIframeBridgeMarkup } from './iframeBridge';
+import {
+  classifyViewportPresetFromWidth,
+  isShortcutTypingTarget,
+  matchShortcutAction,
+} from './shortcuts';
+import { findElementSourceLocation, insertQuickComponentInProject } from './codeSync';
+import type { SelectedElementInfo } from '../types/editor';
 
 test('scanHtmlElements indexes body elements and skips head/script/style', () => {
   const html = `<!doctype html>
@@ -415,5 +433,552 @@ test('replaceTextInHtmlBody replaces visible body text without corrupting tags, 
   assert.ok(cs.html.includes('<p>Welcome to acme studio.</p>'));
 });
 
+test('normalizeUploadedFiles skips node_modules/git, strips multi-level wrappers, and detects nested app root', () => {
+  assert.equal(shouldIgnoreUploadPath('my-app/node_modules/react/index.html'), true);
+  assert.equal(shouldIgnoreUploadPath('my-app/.git/HEAD'), true);
+  assert.equal(shouldIgnoreUploadPath('my-app/.DS_Store'), true);
+  assert.equal(shouldIgnoreUploadPath('my-app/src/App.tsx'), false);
 
+  // Case 1: Multi-level wrapper + node_modules junk
+  const multiWrapper = normalizeUploadedFiles([
+    { path: 'downloads/repo-main/node_modules/pkg/index.html', name: 'index.html', content: '<h1>BAD</h1>' },
+    { path: 'downloads/repo-main/.git/config', name: 'config', content: '' },
+    { path: 'downloads/repo-main/index.html', name: 'index.html', content: '<h1>GOOD</h1>' },
+    { path: 'downloads/repo-main/styles.css', name: 'styles.css', content: 'body {}' },
+  ]);
+  assert.deepEqual(
+    multiWrapper.map((f) => f.path),
+    ['index.html', 'styles.css']
+  );
+  assert.equal(findEntryHtmlPath(multiWrapper), 'index.html');
 
+  // Case 2: Sibling README/.gitignore alongside nested frontend/ app folder
+  const nestedWebApp = normalizeUploadedFiles([
+    { path: 'workspace/README.md', name: 'README.md', content: '# Workspace' },
+    { path: 'workspace/.gitignore', name: '.gitignore', content: 'node_modules' },
+    { path: 'workspace/frontend/package.json', name: 'package.json', content: '{"name":"cool-app"}' },
+    { path: 'workspace/frontend/index.html', name: 'index.html', content: '<div id="root"></div>' },
+    { path: 'workspace/frontend/src/App.tsx', name: 'App.tsx', content: 'export default () => null;' },
+  ]);
+  assert.deepEqual(
+    nestedWebApp.map((f) => f.path),
+    ['index.html', 'package.json', 'src/App.tsx']
+  );
+  assert.equal(findEntryHtmlPath(nestedWebApp), 'index.html');
+  assert.equal(detectProjectTitleFromUpload([], nestedWebApp), 'cool-app');
+
+  // Case 3: CRA layout (public/index.html + src/index.tsx) preserves both folders
+  const craApp = normalizeUploadedFiles([
+    { path: 'my-cra/package.json', name: 'package.json', content: '{"name":"cra-demo"}' },
+    { path: 'my-cra/public/index.html', name: 'index.html', content: '<div id="root"></div>' },
+    { path: 'my-cra/src/index.tsx', name: 'index.tsx', content: 'console.log(1);' },
+  ]);
+  assert.deepEqual(
+    craApp.map((f) => f.path),
+    ['package.json', 'public/index.html', 'src/index.tsx']
+  );
+  assert.equal(findEntryHtmlPath(craApp), 'public/index.html');
+  assert.equal(needsModuleBundling(craApp, 'public/index.html'), true);
+});
+
+test('findEntryHtmlPath ranks root index.html ahead of dist/tests HTML files', () => {
+  const files = normalizeUploadedFiles([
+    { path: 'app/tests/fixture/index.html', name: 'index.html', content: '<h1>Test</h1>' },
+    { path: 'app/dist/index.html', name: 'index.html', content: '<h1>Dist</h1>' },
+    { path: 'app/index.html', name: 'index.html', content: '<h1>Main</h1>' },
+  ]);
+  assert.equal(findEntryHtmlPath(files), 'index.html');
+});
+
+test('bundleProjectInBrowser compiles 55-file Vite/React/TSX project, ignores non-runtime files, shims node:crypto, and emits safe Blob + esm.sh importmap srcdoc', async () => {
+  const rawEntries = [
+    {
+      path: 'big-app/node_modules/bad/index.html',
+      name: 'index.html',
+      content: '<h1>VENDOR</h1>',
+    },
+    {
+      path: 'big-app/android/app/src/main/MainActivity.kt',
+      name: 'MainActivity.kt',
+      content: 'class MainActivity {}',
+    },
+    {
+      path: 'big-app/src/App.test.tsx',
+      name: 'App.test.tsx',
+      content: 'describe("broken test syntax", ( => { UNVALID SYNTAX ));',
+    },
+    {
+      path: 'big-app/src/utils/helper.spec.ts',
+      name: 'helper.spec.ts',
+      content: 'test("unclosed", ( => { ))',
+    },
+    {
+      path: 'big-app/server.ts',
+      name: 'server.ts',
+      content: 'const x = fs.readFileSync("x"); broken(((',
+    },
+    {
+      path: 'big-app/vite.config.ts',
+      name: 'vite.config.ts',
+      content: 'export default (() => {{{;',
+    },
+    {
+      path: 'big-app/tsconfig.json',
+      name: 'tsconfig.json',
+      content: JSON.stringify({ compilerOptions: { paths: { '@/*': ['./src/*'] } } }),
+    },
+    {
+      path: 'big-app/package.json',
+      name: 'package.json',
+      content: JSON.stringify({
+        name: 'big-react-app',
+        dependencies: {
+          react: '^19.0.1',
+          'react-dom': '^19.0.1',
+          'lucide-react': '^0.546.0',
+          firebase: '^11.0.0',
+        },
+      }),
+    },
+    {
+      path: 'big-app/index.html',
+      name: 'index.html',
+      content:
+        '<!doctype html><html><head><title>Big App</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+    },
+    {
+      path: 'big-app/src/index.css',
+      name: 'index.css',
+      content: '@import "tailwindcss";\n.hero-title { color: #38bdf8; }',
+    },
+    {
+      path: 'big-app/src/utils/id.ts',
+      name: 'id.ts',
+      content:
+        'import { randomUUID, createHash } from "node:crypto";\nexport function makeId() { return randomUUID() + ":" + createHash("sha256").update("ok").digest("hex").slice(0, 6); }',
+    },
+  ];
+
+  // Add 46 modular components/widgets to verify 55+ file scale
+  for (let i = 1; i <= 46; i++) {
+    rawEntries.push({
+      path: `big-app/src/components/Widget${i}.tsx`,
+      name: `Widget${i}.tsx`,
+      content: `import React from "react";\nexport function Widget${i}() { return <span data-w="${i}">W${i}</span>; }`,
+    });
+  }
+
+  rawEntries.push({
+    path: 'big-app/src/App.tsx',
+    name: 'App.tsx',
+    content: [
+      'import React from "react";',
+      'import { Sparkles } from "lucide-react";',
+      'import { initializeApp } from "firebase/app";',
+      'import { makeId } from "@/utils/id";',
+      'import { Widget1 } from "./components/Widget1";',
+      'import { Widget46 } from "../src/components/Widget46";',
+      'export function App() {',
+      '  const code = "</script>";',
+      '  return <main data-f={typeof initializeApp}><Sparkles size={16} /><h1 className="hero-title">Loaded {makeId()} {code}</h1><Widget1 /><Widget46 /></main>;',
+      '}',
+    ].join('\n'),
+  });
+
+  rawEntries.push({
+    path: 'big-app/src/main.tsx',
+    name: 'main.tsx',
+    content:
+      'import { createRoot } from "react-dom/client";\nimport { App } from "./App";\nimport "./index.css";\ncreateRoot(document.getElementById("root")!).render(<App />);',
+  });
+
+  assert.equal(isNonRuntimeBundleFile('src/App.test.tsx'), true);
+  assert.equal(isNonRuntimeBundleFile('src/utils/helper.spec.ts'), true);
+  assert.equal(isNonRuntimeBundleFile('server.ts'), true);
+  assert.equal(isNonRuntimeBundleFile('vite.config.ts'), true);
+  assert.equal(isNonRuntimeBundleFile('tsconfig.json'), true);
+  assert.equal(isNonRuntimeBundleFile('package.json'), true);
+  assert.equal(isNonRuntimeBundleFile('android/app/Main.kt'), true);
+  assert.equal(isNonRuntimeBundleFile('src/App.tsx'), false);
+
+  const uploaded = normalizeUploadedFiles(rawEntries);
+  assert.ok(!uploaded.some((f) => f.path.includes('node_modules/')));
+  assert.ok(uploaded.some((f) => f.path.includes('android/app/src/main/MainActivity.kt')));
+
+  const entry = findEntryHtmlPath(uploaded)!;
+  assert.equal(entry, 'index.html');
+  assert.equal(needsModuleBundling(uploaded, entry), true);
+
+  const bundle = await bundleProjectInBrowser(uploaded, entry);
+  assert.equal(bundle.error, undefined);
+  assert.ok(bundle.js && bundle.js.includes('Widget46'));
+  assert.ok(bundle.js && bundle.js.includes('randomUUID'));
+  assert.ok(bundle.css && bundle.css.includes('.hero-title'));
+  assert.equal(bundle.usesTailwind, true);
+  assert.ok(bundle.importMap);
+  assert.equal(bundle.importMap!['react'], 'https://esm.sh/react@19.0.1');
+  assert.equal(bundle.importMap!['lucide-react'], 'https://esm.sh/lucide-react@0.546.0?external=react,react-dom');
+  assert.equal(bundle.importMap!['firebase/app'], 'https://esm.sh/firebase@11.0.0/app?external=react,react-dom');
+
+  const srcDoc = buildSrcDoc(uploaded, entry, '', bundle);
+  assert.ok(srcDoc.includes('<script type="importmap"'));
+  assert.ok(srcDoc.includes('id="__ve_bundle_payload__"'));
+  assert.ok(srcDoc.includes('URL.createObjectURL'));
+  assert.ok(srcDoc.includes('<style data-ve-bundled="true">'));
+  assert.ok(!srcDoc.includes('UNVALID SYNTAX'));
+  // Ensure JSON payload escaped </script> inside user code so it cannot break script parsing
+  assert.ok(!srcDoc.split('id="__ve_bundle_payload__"')[1].split('</script>')[0].includes('"</script>"'));
+});
+
+test('bundleProjectInBrowser reports exact filename and line number on syntax error', async () => {
+  const uploaded = normalizeUploadedFiles([
+    {
+      path: 'err-app/index.html',
+      name: 'index.html',
+      content: '<html><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+    },
+    {
+      path: 'err-app/src/Broken.tsx',
+      name: 'Broken.tsx',
+      content: 'export function Broken() {\n  const ok = 1;\n  const broken = (;\n  return <div>{ok}</div>;\n}',
+    },
+    {
+      path: 'err-app/src/main.tsx',
+      name: 'main.tsx',
+      content: 'import { Broken } from "./Broken";\nconsole.log(Broken);',
+    },
+  ]);
+
+  const bundle = await bundleProjectInBrowser(uploaded, 'index.html');
+  assert.ok(bundle.error);
+  assert.ok(bundle.errorDetails && bundle.errorDetails.length >= 1);
+  assert.equal(bundle.errorDetails![0].file, 'src/Broken.tsx');
+  assert.equal(bundle.errorDetails![0].line, 3);
+
+  const srcDoc = buildSrcDoc(uploaded, 'index.html', '', bundle);
+  assert.ok(srcDoc.includes('Project Build Error'));
+  assert.ok(srcDoc.includes('src/Broken.tsx'));
+  assert.ok(srcDoc.includes('Line 3'));
+});
+
+test('reactVisualSync persists runtime React style and JSX text edits for ZIP export', () => {
+  const files = normalizeUploadedFiles([
+    {
+      path: 'app/index.html',
+      name: 'index.html',
+      content: '<div id="root"></div><script type="module" src="/src/main.tsx"></script>',
+    },
+    {
+      path: 'app/src/App.tsx',
+      name: 'App.tsx',
+      content: 'export function App() {\n  return <h1 className="title">Old Headline</h1>;\n}',
+    },
+    {
+      path: 'app/src/main.tsx',
+      name: 'main.tsx',
+      content: 'import { App } from "./App";\nconsole.log(App);',
+    },
+  ]);
+
+  const restyled = applyRuntimeStylePatchToFiles(files, '#root > h1:nth-of-type(1)', {
+    color: '#ef4444',
+    'font-size': '32px',
+  });
+  const overrideCss = restyled.find((f) => f.path === 'src/framecraft-edits.css');
+  assert.ok(overrideCss);
+  assert.ok(overrideCss!.content.includes('color: #ef4444 !important;'));
+  assert.ok(restyled.find((f) => f.path === 'src/main.tsx')!.content.includes("./framecraft-edits.css"));
+
+  const textEdited = applyRuntimeTextPatchToFiles(restyled, {
+    selector: '#root > h1:nth-of-type(1)',
+    tagName: 'h1',
+    previousText: 'Old Headline',
+    nextText: 'New Edited Headline',
+  });
+  assert.ok(textEdited.find((f) => f.path === 'src/App.tsx')!.content.includes('New Edited Headline'));
+});
+
+test('bundleProjectInBrowser supports multi-language repos, android-kiosk-launcher, ?raw, ?url, static assets, and preserves all files for ZIP', async () => {
+  const rawEntries = [
+    {
+      path: 'kiosk-repo/index.html',
+      name: 'index.html',
+      content:
+        '<!doctype html><html><head><title>Kiosk</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+    },
+    {
+      path: 'kiosk-repo/package.json',
+      name: 'package.json',
+      content: JSON.stringify({ name: 'kiosk-suite', dependencies: { react: '^19.0.1', 'react-dom': '^19.0.1' } }),
+    },
+    {
+      path: 'kiosk-repo/README.md',
+      name: 'README.md',
+      content: '# Kiosk Suite\n```bash\nbroken syntax {{{(\n```',
+    },
+    {
+      path: 'kiosk-repo/.github/workflows/build.yml',
+      name: 'build.yml',
+      content: 'name: Build\non: [push]\njobs:\n  apk:\n    runs-on: ubuntu-latest\n',
+    },
+    {
+      path: 'kiosk-repo/android-kiosk-launcher/build.gradle.kts',
+      name: 'build.gradle.kts',
+      content: 'plugins { id("com.android.application") }',
+    },
+    {
+      path: 'kiosk-repo/android-kiosk-launcher/gradle.properties',
+      name: 'gradle.properties',
+      content: 'org.gradle.jvmargs=-Xmx2048m',
+    },
+    {
+      path: 'kiosk-repo/android-kiosk-launcher/proguard-rules.pro',
+      name: 'proguard-rules.pro',
+      content: '-keep class com.kiosk.** { *; }',
+    },
+    {
+      path: 'kiosk-repo/android-kiosk-launcher/scripts/build.sh',
+      name: 'build.sh',
+      content: '#!/usr/bin/env bash\n./gradlew assembleRelease',
+    },
+    {
+      path: 'kiosk-repo/android-kiosk-launcher/app/src/main/AndroidManifest.xml',
+      name: 'AndroidManifest.xml',
+      content: '<manifest package="com.kiosk.launcher"><application android:label="Kiosk" /></manifest>',
+    },
+    {
+      path: 'kiosk-repo/android-kiosk-launcher/app/src/main/java/MainActivity.kt',
+      name: 'MainActivity.kt',
+      content: 'package com.kiosk.launcher\nclass MainActivity : Activity() { /* Kotlin */ }',
+    },
+    {
+      path: 'kiosk-repo/android-kiosk-launcher/dist/kiosk-release.apk',
+      name: 'kiosk-release.apk',
+      content: 'data:application/vnd.android.package-archive;base64,UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==',
+    },
+    {
+      path: 'kiosk-repo/src/assets/logo.png',
+      name: 'logo.png',
+      content: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    },
+    {
+      path: 'kiosk-repo/src/assets/badge.svg',
+      name: 'badge.svg',
+      content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>',
+    },
+    {
+      path: 'kiosk-repo/src/assets/font.woff2',
+      name: 'font.woff2',
+      content: 'data:font/woff2;base64,d09GMgABAAAAAA==',
+    },
+    {
+      path: 'kiosk-repo/src/styles/theme.css',
+      name: 'theme.css',
+      content: '.kiosk-shell { background: #0f172a; }',
+    },
+    {
+      path: 'kiosk-repo/src/styles/app.css',
+      name: 'app.css',
+      content: '@import "./theme.css";\n.kiosk-title { color: #38bdf8; }',
+    },
+    {
+      path: 'kiosk-repo/src/config.json',
+      name: 'config.json',
+      content: JSON.stringify({ appVersion: '2.4.0' }),
+    },
+    {
+      path: 'kiosk-repo/src/App.jsx',
+      name: 'App.jsx',
+      content: [
+        'import React from "react";',
+        'import mainKt from "../android-kiosk-launcher/app/src/main/java/MainActivity.kt?raw";',
+        'import manifestXml from "../android-kiosk-launcher/app/src/main/AndroidManifest.xml?raw";',
+        'import apkUrl from "../android-kiosk-launcher/dist/kiosk-release.apk?url";',
+        'import logoUrl from "./assets/logo.png";',
+        'import badgeSvg from "./assets/badge.svg";',
+        'import fontUrl from "./assets/font.woff2?url";',
+        'import cfg from "./config.json";',
+        'export function App() {',
+        '  return React.createElement("div", { "data-ver": cfg.appVersion, "data-apk": apkUrl, "data-font": fontUrl }, mainKt + manifestXml + logoUrl + badgeSvg);',
+        '}',
+      ].join('\n'),
+    },
+    {
+      path: 'kiosk-repo/src/main.tsx',
+      name: 'main.tsx',
+      content: 'import { createRoot } from "react-dom/client";\nimport "./styles/app.css";\nimport { App } from "./App";\ncreateRoot(document.getElementById("root")!).render(<App />);',
+    },
+  ];
+
+  assert.equal(isNonRuntimeBundleFile('android-kiosk-launcher/app/src/main/java/MainActivity.kt'), true);
+  assert.equal(isNonRuntimeBundleFile('android-kiosk-launcher/build.gradle.kts'), true);
+  assert.equal(isNonRuntimeBundleFile('.github/workflows/build.yml'), true);
+  assert.equal(isNonRuntimeBundleFile('README.md'), true);
+
+  const uploaded = normalizeUploadedFiles(rawEntries);
+  assert.equal(uploaded.length, rawEntries.length);
+  assert.ok(uploaded.some((f) => f.path === 'android-kiosk-launcher/app/src/main/java/MainActivity.kt'));
+  assert.ok(uploaded.some((f) => f.path === 'android-kiosk-launcher/dist/kiosk-release.apk'));
+
+  const bundle = await bundleProjectInBrowser(uploaded, 'index.html');
+  assert.equal(bundle.error, undefined);
+  assert.ok(bundle.js && bundle.js.includes('class MainActivity : Activity()'));
+  assert.ok(bundle.js && bundle.js.includes('com.kiosk.launcher'));
+  assert.ok(bundle.js && bundle.js.includes('data:image/png;base64,'));
+  assert.ok(bundle.js && bundle.js.includes('data:image/svg+xml'));
+  assert.ok(bundle.js && bundle.js.includes('data:application/vnd.android.package-archive;base64,'));
+  assert.ok(bundle.js && bundle.js.includes('data:font/woff2;base64,'));
+  assert.ok(bundle.js && bundle.js.includes('2.4.0'));
+  assert.ok(bundle.css && bundle.css.includes('.kiosk-shell') && bundle.css.includes('.kiosk-title'));
+
+  const srcDoc = buildSrcDoc(uploaded, 'index.html', buildIframeBridgeMarkup('edit', null), bundle);
+  assert.ok(srcDoc.includes('<style data-ve-bundled="true">'));
+  assert.ok(srcDoc.includes('MutationObserver'));
+  assert.ok(srcDoc.includes('data-ve-rt'));
+});
+
+test('matchShortcutAction supports Ctrl/Cmd keybinds and respects typing context except Escape & Save', () => {
+  const base = {
+    editorMode: 'edit' as const,
+    hasSelectedElement: true,
+    hasOpenModal: false,
+    isTyping: false,
+  };
+
+  assert.equal(matchShortcutAction({ key: 'z', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'undo');
+  assert.equal(matchShortcutAction({ key: 'z', ctrlKey: false, metaKey: true, shiftKey: true, altKey: false }, base), 'redo');
+  assert.equal(matchShortcutAction({ key: 'y', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'redo');
+  assert.equal(matchShortcutAction({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'save');
+  assert.equal(matchShortcutAction({ key: 'e', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'toggle-mode');
+  assert.equal(matchShortcutAction({ key: 'b', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'toggle-left-sidebar');
+  assert.equal(matchShortcutAction({ key: 'i', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'toggle-right-sidebar');
+  assert.equal(matchShortcutAction({ key: 'd', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'duplicate');
+  assert.equal(matchShortcutAction({ key: 'Delete', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'delete');
+  assert.equal(matchShortcutAction({ key: 'ArrowUp', ctrlKey: false, metaKey: false, shiftKey: false, altKey: true }, base), 'move-up');
+  assert.equal(matchShortcutAction({ key: 'ArrowDown', ctrlKey: false, metaKey: false, shiftKey: false, altKey: true }, base), 'move-down');
+  assert.equal(matchShortcutAction({ key: '1', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'viewport-desktop');
+  assert.equal(matchShortcutAction({ key: '2', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'viewport-tablet');
+  assert.equal(matchShortcutAction({ key: '3', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'viewport-mobile');
+  assert.equal(matchShortcutAction({ key: '?', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'open-shortcuts');
+
+  // Typing guard ignores Delete/1/Undo, but keeps Escape & Ctrl/Cmd+S active
+  const typingCtx = { ...base, isTyping: true };
+  assert.equal(matchShortcutAction({ key: 'Delete', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, typingCtx), null);
+  assert.equal(matchShortcutAction({ key: '1', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, typingCtx), null);
+  assert.equal(matchShortcutAction({ key: 'z', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, typingCtx), null);
+  assert.equal(matchShortcutAction({ key: 'Escape', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, typingCtx), 'escape');
+  assert.equal(matchShortcutAction({ key: 's', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, typingCtx), 'save');
+
+  assert.equal(isShortcutTypingTarget({ tagName: 'INPUT' }), true);
+  assert.equal(isShortcutTypingTarget({ tagName: 'TEXTAREA' }), true);
+  assert.equal(isShortcutTypingTarget({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(isShortcutTypingTarget({ tagName: 'DIV', closest: () => ({}) }), true);
+  assert.equal(isShortcutTypingTarget({ tagName: 'BUTTON', isContentEditable: false }), false);
+
+  assert.equal(classifyViewportPresetFromWidth(390), 'mobile');
+  assert.equal(classifyViewportPresetFromWidth(768), 'tablet');
+  assert.equal(classifyViewportPresetFromWidth(1180), 'desktop');
+});
+
+test('moveElementSiblingInHtml reorders sibling elements up and down cleanly', () => {
+  const html = tagHtmlWithVeIds(
+    '<!doctype html><html><body><section id="wrap"><h1>First</h1><p>Second</p><button>Third</button></section></body></html>'
+  );
+  const scanned = scanHtmlElements(html);
+  const pEl = scanned.find((el) => el.tagName === 'p')!;
+
+  const movedUp = moveElementSiblingInHtml(html, pEl.veId, 'up');
+  assert.equal(movedUp.moved, true);
+  assert.ok(movedUp.html.indexOf('<p') < movedUp.html.indexOf('<h1'));
+
+  const movedDown = moveElementSiblingInHtml(movedUp.html, pEl.veId, 'down');
+  assert.equal(movedDown.moved, true);
+  assert.ok(movedDown.html.indexOf('<h1') < movedDown.html.indexOf('<p'));
+
+  const btnEl = scanned.find((el) => el.tagName === 'button')!;
+  const boundaryDown = moveElementSiblingInHtml(html, btnEl.veId, 'down');
+  assert.equal(boundaryDown.moved, false);
+});
+
+test('findElementSourceLocation and insertQuickComponentInProject locate and insert across HTML and TSX', () => {
+  // Static HTML case
+  const staticHtml = tagHtmlWithVeIds('<html><body><section><h2 id="hero">Hello World</h2></section></body></html>');
+  const h2Id = scanHtmlElements(staticHtml).find((el) => el.tagName === 'h2')!.veId;
+  const staticFiles = [
+    { path: 'index.html', name: 'index.html', type: 'html' as const, content: staticHtml },
+  ];
+  const mockSelectedHtml = {
+    veId: h2Id,
+    runtimeId: 'rt-1',
+    tagName: 'h2',
+    id: 'hero',
+    className: '',
+    textContent: 'Hello World',
+  } as SelectedElementInfo;
+
+  const htmlLoc = findElementSourceLocation(staticFiles, 'index.html', mockSelectedHtml);
+  assert.equal(htmlLoc?.path, 'index.html');
+  assert.equal(htmlLoc?.line, 1);
+
+  const insertedStatic = insertQuickComponentInProject(staticFiles, 'index.html', 'button', mockSelectedHtml);
+  assert.equal(insertedStatic.targetPath, 'index.html');
+  assert.ok(insertedStatic.insertedVeId);
+  assert.ok(insertedStatic.files[0].content.includes('Action Button'));
+
+  // React / TSX SPA case
+  const reactFiles = normalizeUploadedFiles([
+    { path: 'app/index.html', name: 'index.html', content: '<div id="root"></div><script type="module" src="/src/main.tsx"></script>' },
+    {
+      path: 'app/src/App.tsx',
+      name: 'App.tsx',
+      content: 'export function App() {\n  return (\n    <main className="shell">\n      <h1>Studio Title</h1>\n    </main>\n  );\n}',
+    },
+    { path: 'app/src/main.tsx', name: 'main.tsx', content: 'import { App } from "./App"; console.log(App);' },
+  ]);
+  const mockSelectedReact = {
+    veId: null,
+    runtimeId: 'rt-2',
+    tagName: 'h1',
+    id: '',
+    className: '',
+    textContent: 'Studio Title',
+  } as SelectedElementInfo;
+
+  const jsxLoc = findElementSourceLocation(reactFiles, 'index.html', mockSelectedReact);
+  assert.equal(jsxLoc?.path, 'src/App.tsx');
+  assert.equal(jsxLoc?.line, 4);
+
+  const insertedJsx = insertQuickComponentInProject(reactFiles, 'index.html', 'card', mockSelectedReact);
+  assert.equal(insertedJsx.targetPath, 'src/App.tsx');
+  assert.ok(insertedJsx.files.find((f) => f.path === 'src/App.tsx')!.content.includes('Feature Card'));
+});
+
+test('getFileBadgeStyle color-codes project extensions and buildProjectFileTree nests folders deterministically', () => {
+  assert.equal(getFileBadgeStyle('src/App.tsx').category, 'react');
+  assert.equal(getFileBadgeStyle('src/Widget.jsx').shortLabel, 'JSX');
+  assert.equal(getFileBadgeStyle('src/main.ts').category, 'script');
+  assert.equal(getFileBadgeStyle('src/styles.css').category, 'style');
+  assert.equal(getFileBadgeStyle('package.json').category, 'json');
+  assert.equal(getFileBadgeStyle('index.html').category, 'html');
+  assert.equal(getFileBadgeStyle('android/MainActivity.kt').category, 'native');
+
+  const tree = buildProjectFileTree([
+    { path: 'index.html', name: 'index.html', content: '<html/>', type: 'html' },
+    { path: 'src/components/Button.tsx', name: 'Button.tsx', content: '<button/>', type: 'js' },
+    { path: 'src/App.tsx', name: 'App.tsx', content: '<div/>', type: 'js' },
+    { path: 'android/app/Main.kt', name: 'Main.kt', content: 'class Main', type: 'other' },
+  ]);
+
+  assert.equal(tree[0].kind, 'folder');
+  assert.equal(tree[0].name, 'android');
+  assert.equal(tree[1].kind, 'folder');
+  assert.equal(tree[1].name, 'src');
+  assert.equal(tree[2].kind, 'file');
+  assert.equal(tree[2].name, 'index.html');
+  if (tree[1].kind === 'folder') {
+    assert.equal(tree[1].children[0].kind, 'folder');
+    assert.equal(tree[1].children[0].name, 'components');
+    assert.equal(tree[1].children[1].kind, 'file');
+    assert.equal(tree[1].children[1].name, 'App.tsx');
+  }
+});

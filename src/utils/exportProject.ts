@@ -12,13 +12,21 @@ export function triggerBlobDownload(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+const BINARY_ZIP_EXT_RE =
+  /\.(png|jpe?g|gif|webp|avif|ico|woff2?|ttf|eot|otf|apk|aab|jar|keystore|jks|mp4|webm|mp3|wav|pdf)$/i;
+
 export async function exportProjectAsZip(
   files: ProjectFile[],
   archiveName = 'framecraft-project.zip'
 ): Promise<void> {
   const zip = new JSZip();
   for (const file of files) {
-    zip.file(file.path, file.content);
+    const dataUrlMatch = /^data:[^;]+;base64,(.+)$/s.exec(file.content);
+    if (dataUrlMatch && BINARY_ZIP_EXT_RE.test(file.path)) {
+      zip.file(file.path, dataUrlMatch[1], { base64: true });
+    } else {
+      zip.file(file.path, file.content);
+    }
   }
   const blob = await zip.generateAsync({ type: 'blob' });
   triggerBlobDownload(blob, archiveName);

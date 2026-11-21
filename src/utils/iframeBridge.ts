@@ -64,6 +64,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   }
 </style>
 <style data-ve-internal="live-responsive-css"></style>
+<style data-ve-internal="layout-outlines"></style>
 <div id="__ve_hover_badge" data-ve-internal="badge"></div>
 <div id="__ve_action_toast" data-ve-internal="action-toast" role="status"></div>
 <script data-ve-internal="bridge-script">
@@ -79,7 +80,10 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   var badge = document.getElementById('__ve_hover_badge');
   var actionToast = document.getElementById('__ve_action_toast');
   var actionToastTimer = null;
+  var domTreeTimer = null;
+  var outlinesEnabled = false;
   var liveResponsiveStyleEl = document.querySelector('style[data-ve-internal="live-responsive-css"]');
+  var outlinesStyleEl = document.querySelector('style[data-ve-internal="layout-outlines"]');
   var moveDrag = null;
   var suppressNextClick = false;
 
@@ -90,6 +94,20 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   var SVG_INNER_TAGS = new Set([
     'path', 'polygon', 'polyline', 'circle', 'ellipse', 'rect', 'line', 'g', 'text', 'tspan', 'defs', 'use'
   ]);
+
+  function applyOutlinesCss() {
+    if (!outlinesStyleEl) return;
+    if (!outlinesEnabled || mode !== 'edit') {
+      outlinesStyleEl.textContent = '';
+      return;
+    }
+    outlinesStyleEl.textContent =
+      'body [data-ve-id]:not([data-ve-selected="true"]):not([data-ve-hovered="true"]),' +
+      'body [data-ve-rt]:not([data-ve-selected="true"]):not([data-ve-hovered="true"]) {' +
+      '  outline: 1px dashed rgba(56, 189, 248, 0.42) !important;' +
+      '  outline-offset: -1px !important;' +
+      '}';
+  }
 
   function resolveEditableTarget(rawTarget) {
     if (!rawTarget || rawTarget.nodeType !== 1) return null;
@@ -113,7 +131,12 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
   function getRuntimeId(el) {
     if (!runtimeMap.has(el)) {
-      runtimeMap.set(el, 'rt-' + (++runtimeCounter));
+      var existingRt = el.getAttribute && el.getAttribute('data-ve-rt');
+      var id = existingRt || ('rt-' + (++runtimeCounter));
+      runtimeMap.set(el, id);
+      if (!existingRt && el.setAttribute && !el.getAttribute('data-ve-id')) {
+        el.setAttribute('data-ve-rt', id);
+      }
     }
     return runtimeMap.get(el);
   }
@@ -121,8 +144,74 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   function isInternalEl(el) {
     if (!el || el.nodeType !== 1) return true;
     if (el.id === '__ve_hover_badge' || el.id === '__ve_action_toast' || el.getAttribute('data-ve-internal')) return true;
+    if (el.closest && el.closest('[data-ve-internal]')) return true;
     var tag = el.tagName.toLowerCase();
-    return tag === 'html' || tag === 'head' || tag === 'script' || tag === 'style';
+    return tag === 'html' || tag === 'head' || tag === 'script' || tag === 'style' || tag === 'meta' || tag === 'link';
+  }
+
+  function tagMountedElements(rootNode) {
+    if (!rootNode || rootNode.nodeType !== 1) return 0;
+    var tagged = 0;
+    var stack = [rootNode];
+    while (stack.length > 0) {
+      var cur = stack.pop();
+      if (!cur || cur.nodeType !== 1 || isInternalEl(cur)) continue;
+      if (cur !== document.body && !cur.getAttribute('data-ve-id') && !cur.getAttribute('data-ve-rt')) {
+        getRuntimeId(cur);
+        tagged++;
+      }
+      var children = cur.children;
+      if (children && children.length) {
+        for (var i = children.length - 1; i >= 0; i--) {
+          stack.push(children[i]);
+        }
+      }
+    }
+    return tagged;
+  }
+
+  function buildDomTree(rootNode, depth) {
+    if (!rootNode || rootNode.nodeType !== 1 || depth > 12) return [];
+    var result = [];
+    var children = rootNode.children;
+    if (!children) return result;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (!child || child.nodeType !== 1 || isInternalEl(child)) continue;
+      var veId = child.getAttribute('data-ve-id') || null;
+      var rtId = veId ? null : getRuntimeId(child);
+      var clsRaw = typeof child.className === 'string' ? child.className.trim() : '';
+      var clsPreview = clsRaw ? clsRaw.split(/\\s+/).filter(Boolean).slice(0, 2).join('.') : '';
+      var directText = '';
+      if (child.children.length === 0) {
+        directText = (child.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 34);
+      }
+      result.push({
+        nodeKey: veId || rtId || ('node-' + depth + '-' + i),
+        veId: veId,
+        rtId: rtId,
+        tagName: child.tagName.toLowerCase(),
+        idAttr: child.id || '',
+        classPreview: clsPreview,
+        textPreview: directText,
+        children: buildDomTree(child, depth + 1)
+      });
+    }
+    return result;
+  }
+
+  function emitDomTree() {
+    if (!document.body) return;
+    tagMountedElements(document.body);
+    postToParent('DOM_TREE_UPDATE', { nodes: buildDomTree(document.body, 0) });
+  }
+
+  function scheduleDomTreeEmit() {
+    if (domTreeTimer) window.clearTimeout(domTreeTimer);
+    domTreeTimer = window.setTimeout(function() {
+      domTreeTimer = null;
+      emitDomTree();
+    }, 80);
   }
 
   function buildSelectorPath(el) {
@@ -141,6 +230,35 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       parts.unshift(part);
       cur = cur.parentElement;
       depth++;
+    }
+    return parts.join(' > ');
+  }
+
+  function buildUniqueCssSelector(el) {
+    var parts = [];
+    var cur = el;
+    while (cur && cur.nodeType === 1 && cur !== document.body && cur !== document.documentElement) {
+      var tag = cur.tagName.toLowerCase();
+      if (cur.id && /^[A-Za-z_][A-Za-z0-9_-]*$/.test(cur.id)) {
+        parts.unshift('#' + cur.id);
+        break;
+      }
+      var parent = cur.parentElement;
+      if (!parent) {
+        parts.unshift(tag);
+        break;
+      }
+      var index = 1;
+      var sib = cur.previousElementSibling;
+      while (sib) {
+        if (sib.tagName === cur.tagName) index++;
+        sib = sib.previousElementSibling;
+      }
+      parts.unshift(tag + ':nth-of-type(' + index + ')');
+      cur = parent;
+    }
+    if (parts.length && !parts[0].startsWith('#')) {
+      parts.unshift('body');
     }
     return parts.join(' > ');
   }
@@ -209,6 +327,11 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     };
   }
 
+  function parsePxFloat(v) {
+    var n = parseFloat(v);
+    return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+  }
+
   function getElementPayload(el) {
     var rect = el.getBoundingClientRect();
     var computed = window.getComputedStyle(el);
@@ -228,6 +351,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       actionType: el.getAttribute('data-ve-action') || '',
       actionValue: el.getAttribute('data-ve-value') || '',
       selectorPath: buildSelectorPath(el),
+      uniqueSelector: buildUniqueCssSelector(el),
       textContent: el.textContent || '',
       hasElementChildren: el.children.length > 0,
       isTextEditable: isTextEditableElement(el),
@@ -237,6 +361,20 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
         left: rect.left,
         width: rect.width,
         height: rect.height
+      },
+      boxModel: {
+        margin: {
+          top: parsePxFloat(computed.marginTop),
+          right: parsePxFloat(computed.marginRight),
+          bottom: parsePxFloat(computed.marginBottom),
+          left: parsePxFloat(computed.marginLeft)
+        },
+        padding: {
+          top: parsePxFloat(computed.paddingTop),
+          right: parsePxFloat(computed.paddingRight),
+          bottom: parsePxFloat(computed.paddingBottom),
+          left: parsePxFloat(computed.paddingLeft)
+        }
       },
       styles: {
         fontFamily: el.style.fontFamily || computed.fontFamily,
@@ -324,6 +462,14 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     }
   }
 
+  function findNodeById(nodeId) {
+    if (!nodeId) return null;
+    return (
+      document.querySelector('[data-ve-id="' + nodeId + '"]') ||
+      document.querySelector('[data-ve-rt="' + nodeId + '"]')
+    );
+  }
+
   function commitInlineEdit() {
     if (!editingEl) return;
     var target = editingEl;
@@ -335,9 +481,11 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       postToParent('TEXT_COMMITTED', {
         veId: target.getAttribute('data-ve-id') || null,
         runtimeId: getRuntimeId(target),
+        previousText: originalEditText,
         textContent: nextText,
         element: getElementPayload(target)
       });
+      scheduleDomTreeEmit();
     } else {
       postToParent('RECT_UPDATE', { element: getElementPayload(target) });
     }
@@ -539,16 +687,60 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   }, true);
 
   document.addEventListener('keydown', function(e) {
-    if (!editingEl) return;
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      cancelInlineEdit();
-    } else if (e.key === 'Enter' && !e.shiftKey) {
-      var tag = editingEl.tagName.toLowerCase();
-      if (tag !== 'p' && tag !== 'div') {
+    if (editingEl) {
+      if (e.key === 'Escape') {
         e.preventDefault();
-        commitInlineEdit();
+        cancelInlineEdit();
+        return;
       }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        var tag = editingEl.tagName.toLowerCase();
+        if (tag !== 'p' && tag !== 'div') {
+          e.preventDefault();
+          commitInlineEdit();
+          return;
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        postToParent('IFRAME_KEYDOWN', {
+          key: e.key,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey
+        });
+      }
+      return;
+    }
+
+    var active = document.activeElement;
+    var activeTag = active && active.tagName ? active.tagName.toUpperCase() : '';
+    var isInput = activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT' || (active && active.isContentEditable);
+    if (isInput && e.key !== 'Escape' && !((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's')) {
+      return;
+    }
+
+    var hasMod = e.ctrlKey || e.metaKey;
+    var lower = e.key.toLowerCase();
+    var isShortcut =
+      e.key === 'Escape' ||
+      e.key === '?' ||
+      (e.key === 'Delete' && mode === 'edit') ||
+      (e.key === 'Backspace' && mode === 'edit') ||
+      (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) ||
+      (!hasMod && !e.altKey && (e.key === '1' || e.key === '2' || e.key === '3')) ||
+      (hasMod && ['z', 'y', 's', 'e', 'b', 'i', 'd'].indexOf(lower) !== -1);
+
+    if (isShortcut) {
+      e.preventDefault();
+      postToParent('IFRAME_KEYDOWN', {
+        key: e.key,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey
+      });
     }
   }, true);
 
@@ -579,16 +771,88 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
         if (selectedEl) {
           selectedEl.removeAttribute('data-ve-selected');
         }
-      } else if (selectedEl && document.body.contains(selectedEl)) {
-        selectedEl.setAttribute('data-ve-selected', 'true');
-        notifyRectChange();
+      } else {
+        tagMountedElements(document.body);
+        if (selectedEl && document.body.contains(selectedEl)) {
+          selectedEl.setAttribute('data-ve-selected', 'true');
+          notifyRectChange();
+        }
+      }
+      applyOutlinesCss();
+      return;
+    }
+
+    if (msg.type === 'SET_OUTLINES') {
+      outlinesEnabled = Boolean(msg.enabled);
+      applyOutlinesCss();
+      return;
+    }
+
+    if (msg.type === 'SELECT_VE_ID' || msg.type === 'SELECT_NODE_ID') {
+      var targetId = msg.nodeId || msg.veId || null;
+      var found = findNodeById(targetId);
+      if (found && msg.scrollIntoView !== false && found.scrollIntoView) {
+        found.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      selectElement(found, true);
+      window.requestAnimationFrame(notifyRectChange);
+      return;
+    }
+
+    if (msg.type === 'HOVER_NODE_ID') {
+      clearHover();
+      if (mode === 'edit' && msg.nodeId) {
+        var hov = findNodeById(msg.nodeId);
+        if (hov && !isInternalEl(hov) && hov !== document.body) {
+          hoveredEl = hov;
+          if (hoveredEl !== selectedEl) {
+            hoveredEl.setAttribute('data-ve-hovered', 'true');
+          }
+          positionBadge(hoveredEl);
+        }
       }
       return;
     }
 
-    if (msg.type === 'SELECT_VE_ID') {
-      var found = msg.veId ? document.querySelector('[data-ve-id="' + msg.veId + '"]') : null;
-      selectElement(found, true);
+    if (msg.type === 'SELECT_PARENT') {
+      if (!selectedEl) return;
+      var parentEl = selectedEl.parentElement;
+      if (parentEl && !isInternalEl(parentEl) && parentEl !== document.body && parentEl !== document.documentElement) {
+        if (parentEl.scrollIntoView) {
+          parentEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+        selectElement(parentEl, true);
+        window.requestAnimationFrame(notifyRectChange);
+      }
+      return;
+    }
+
+    if (msg.type === 'MOVE_SIBLING' && selectedEl && selectedEl.parentElement) {
+      var dir = msg.direction === 'up' ? 'up' : 'down';
+      var parent = selectedEl.parentElement;
+      if (dir === 'up') {
+        var prev = selectedEl.previousElementSibling;
+        while (prev && isInternalEl(prev)) prev = prev.previousElementSibling;
+        if (prev) {
+          parent.insertBefore(selectedEl, prev);
+        }
+      } else {
+        var next = selectedEl.nextElementSibling;
+        while (next && isInternalEl(next)) next = next.nextElementSibling;
+        if (next) {
+          parent.insertBefore(next, selectedEl);
+        }
+      }
+      if (selectedEl.scrollIntoView) {
+        selectedEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+      notifyRectChange();
+      emitDomTree();
+      return;
+    }
+
+    if (msg.type === 'REQUEST_DOM_TREE') {
+      emitDomTree();
       return;
     }
 
@@ -624,6 +888,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
         }
       });
       notifyRectChange();
+      scheduleDomTreeEmit();
       return;
     }
 
@@ -694,6 +959,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     if (msg.type === 'PREVIEW_TEXT' && selectedEl) {
       selectedEl.textContent = msg.textContent || '';
       notifyRectChange();
+      scheduleDomTreeEmit();
       return;
     }
 
@@ -701,6 +967,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       var toRemove = selectedEl;
       selectElement(null, true);
       toRemove.remove();
+      scheduleDomTreeEmit();
       return;
     }
 
@@ -714,7 +981,12 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       var placement = CONTAINER_TAGS.has(tag) ? 'inside' : 'after';
 
       var anchor = hit;
-      while (anchor && anchor !== document.body && !anchor.getAttribute('data-ve-id')) {
+      while (
+        anchor &&
+        anchor !== document.body &&
+        !anchor.getAttribute('data-ve-id') &&
+        !anchor.getAttribute('data-ve-rt')
+      ) {
         anchor = anchor.parentElement;
         placement = 'inside';
       }
@@ -750,11 +1022,16 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     }
   });
 
-  // Restore selection after srcdoc reload if veId was provided
+  // Tag rendered DOM elements inside #root / #app / body after React mounts asynchronously
   var initialSelected = ${serializedSelected};
-  if (initialSelected && mode === 'edit') {
-    var restoreEl = document.querySelector('[data-ve-id="' + initialSelected + '"]');
+  var restoredInitial = false;
+  var didNotifyMount = false;
+
+  function tryRestoreInitialSelection() {
+    if (restoredInitial || !initialSelected || mode !== 'edit') return;
+    var restoreEl = findNodeById(initialSelected);
     if (restoreEl) {
+      restoredInitial = true;
       if (restoreEl.scrollIntoView) {
         restoreEl.scrollIntoView({ block: 'center', inline: 'nearest' });
       }
@@ -762,6 +1039,51 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       window.requestAnimationFrame(notifyRectChange);
     }
   }
+
+  function syncMountedDom() {
+    var appRoot = document.getElementById('root') || document.getElementById('app') || document.body;
+    tagMountedElements(document.body);
+    tryRestoreInitialSelection();
+    emitDomTree();
+    if (!didNotifyMount && appRoot && appRoot.children && appRoot.children.length > 0) {
+      didNotifyMount = true;
+      postToParent('DOM_MOUNTED', {
+        taggedCount: document.querySelectorAll('[data-ve-rt], [data-ve-id]').length
+      });
+    }
+  }
+
+  syncMountedDom();
+
+  if (typeof MutationObserver !== 'undefined' && document.body) {
+    var domObserver = new MutationObserver(function(mutations) {
+      var needsTag = false;
+      for (var i = 0; i < mutations.length; i++) {
+        var added = mutations[i].addedNodes;
+        var removed = mutations[i].removedNodes;
+        if (removed && removed.length > 0) {
+          needsTag = true;
+        }
+        if (added && added.length > 0) {
+          for (var j = 0; j < added.length; j++) {
+            if (added[j].nodeType === 1 && !isInternalEl(added[j])) {
+              tagMountedElements(added[j]);
+              needsTag = true;
+            }
+          }
+        }
+      }
+      if (needsTag) {
+        tryRestoreInitialSelection();
+        scheduleDomTreeEmit();
+        if (!didNotifyMount) {
+          syncMountedDom();
+        }
+      }
+    });
+    domObserver.observe(document.body, { childList: true, subtree: true });
+  }
 })();
 </script>`;
 }
+

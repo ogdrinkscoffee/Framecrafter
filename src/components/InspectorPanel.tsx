@@ -13,6 +13,7 @@ import {
   ArrowUp,
   Bold,
   BringToFront,
+  Code2,
   Copy,
   Eye,
   EyeOff,
@@ -80,6 +81,8 @@ interface InspectorPanelProps {
   onDuplicateElement: () => void;
   onRemoveElement: () => void;
   onToggleVisibility: () => void;
+  onViewInCode: () => void;
+  onHoverSpacing: (kind: 'margin' | 'padding' | null) => void;
 }
 
 const SCOPE_LABELS: Record<ResponsiveScope, string> = {
@@ -129,6 +132,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onDuplicateElement,
   onRemoveElement,
   onToggleVisibility,
+  onViewInCode,
+  onHoverSpacing,
 }) => {
   const [textDraft, setTextDraft] = useState('');
   const [widthDraft, setWidthDraft] = useState('');
@@ -293,16 +298,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
   if (!selectedElement) {
     return (
-      <div className="flex-1 p-6 flex flex-col items-center justify-center text-center">
-        <div className="w-10 h-10 rounded-lg bg-slate-800/70 border border-slate-700/80 flex items-center justify-center mb-3">
-          <MousePointerClick className="w-5 h-5 text-slate-400" />
+      <div className="flex-1 p-6 flex flex-col items-center justify-center text-center bg-[#111114]">
+        <div className="w-11 h-11 rounded-xl bg-[#18181b] border border-white/[0.08] studio-card-highlight flex items-center justify-center mb-3.5 shadow-lg shadow-black/40">
+          <MousePointerClick className="w-5 h-5 text-indigo-400" strokeWidth={1.5} />
         </div>
-        <h2 className="font-display text-sm font-semibold text-slate-200 mb-1.5">
+        <h2 className="font-display text-[14px] font-semibold tracking-[-0.015em] text-zinc-100 mb-1.5">
           Select an element
         </h2>
-        <p className="text-xs text-slate-400 leading-relaxed max-w-60">
+        <p className="text-[12px] text-zinc-400 leading-relaxed max-w-60">
           Click any element in the Live Canvas to customize typography, button actions, or
-          desktop/mobile layouts.
+          desktop and mobile layouts.
         </p>
       </div>
     );
@@ -481,21 +486,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   ) || 0;
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-h-0 bg-[#111114]">
       {/* Element Identity & Quick Actions */}
-      <div className="px-4 py-3 border-b border-slate-800/80 space-y-2.5 shrink-0 bg-[#0a0f18]">
+      <div className="px-4 py-3 border-b border-white/[0.08] space-y-2.5 shrink-0 bg-[#111114]">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-mono-tabular text-xs font-semibold text-blue-400 truncate">
+              <span className="font-mono-tabular text-[12px] font-semibold text-indigo-300 truncate">
                 &lt;{selectedElement.tagName}&gt;
                 {selectedElement.veShape ? ` (${selectedElement.veShape})` : selectedElement.id ? `#${selectedElement.id}` : ''}
               </span>
-              <span className="font-mono-tabular text-[11px] text-slate-400 shrink-0">
+              <span className="font-mono-tabular text-[12px] text-zinc-400 shrink-0">
                 {Math.round(selectedElement.rect.width)} × {Math.round(selectedElement.rect.height)}
               </span>
             </div>
-            <div className="text-[11px] text-slate-400 truncate" title={selectedElement.selectorPath}>
+            <div className="text-[11px] font-mono-tabular text-zinc-500 truncate mt-0.5" title={selectedElement.selectorPath}>
               {selectedElement.selectorPath}
             </div>
           </div>
@@ -503,24 +508,33 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
+              onClick={onViewInCode}
+              aria-label="View selected element in code"
+              title="View in Code Editor"
+              className="p-1.5 rounded-md text-zinc-400 hover:text-cyan-300 hover:bg-[#27272a] transition-colors cursor-pointer"
+            >
+              <Code2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+            </button>
+            <button
+              type="button"
               onClick={onDuplicateElement}
               aria-label="Duplicate selected element"
               title="Duplicate element (Ctrl+D)"
-              className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors cursor-pointer"
+              className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] transition-colors cursor-pointer"
             >
-              <Copy className="w-3.5 h-3.5" />
+              <Copy className="w-3.5 h-3.5" strokeWidth={1.5} />
             </button>
             <button
               type="button"
               onClick={onToggleVisibility}
               aria-label={selectedElement.isHidden ? 'Show element' : 'Hide element'}
               title={selectedElement.isHidden ? 'Show element' : 'Hide element'}
-              className="p-1.5 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors cursor-pointer"
+              className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] transition-colors cursor-pointer"
             >
               {selectedElement.isHidden ? (
-                <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                <EyeOff className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.5} />
               ) : (
-                <Eye className="w-3.5 h-3.5" />
+                <Eye className="w-3.5 h-3.5" strokeWidth={1.5} />
               )}
             </button>
             <button
@@ -528,17 +542,17 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               onClick={onRemoveElement}
               aria-label="Remove selected element"
               title="Remove element"
-              className="p-1.5 rounded text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+              className="p-1.5 rounded-md text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
             </button>
           </div>
         </div>
 
         {/* Responsive Breakpoint Scope Selector */}
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           <div
-            className="grid grid-cols-4 p-0.5 rounded-md bg-[#090d16] border border-slate-800"
+            className="grid grid-cols-4 p-0.5 rounded-full bg-[#09090b] border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
             role="group"
             aria-label="Responsive Editing Scope"
           >
@@ -548,21 +562,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 type="button"
                 onClick={() => onChangeResponsiveScope(scope)}
                 aria-pressed={responsiveScope === scope}
-                className={`py-1 rounded text-[11px] font-medium capitalize transition-colors cursor-pointer ${
+                className={`py-1 rounded-full text-[11px] font-medium capitalize transition-all cursor-pointer ${
                   responsiveScope === scope
                     ? scope === 'mobile'
-                      ? 'bg-amber-600 text-white'
+                      ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-[0_0_12px_rgba(245,158,11,0.3)]'
                       : scope === 'desktop'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-700 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
+                        ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-[0_0_12px_rgba(99,102,241,0.3)]'
+                        : 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                    : 'text-zinc-400 hover:text-zinc-100'
                 }`}
               >
                 {scope}
               </button>
             ))}
           </div>
-          <div className="flex items-center justify-between text-[11px] text-slate-400">
+          <div className="flex items-center justify-between text-[11px] text-zinc-400 px-0.5">
             <span>{SCOPE_LABELS[responsiveScope]}</span>
             {responsiveScope !== 'all' && hasScopeOverrides && (
               <button
@@ -578,7 +592,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     `Clear ${responsiveScope} overrides`
                   );
                 }}
-                className="text-amber-400 hover:text-amber-300 cursor-pointer"
+                className="text-amber-400 hover:text-amber-300 font-medium cursor-pointer"
               >
                 Clear
               </button>
@@ -591,17 +605,17 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       <div className="flex-1 overflow-y-auto builder-scroll p-4 space-y-5">
         {/* Button & Link Action Section */}
         {isActionableTag && (
-          <section className="space-y-2.5 pb-4 border-b border-slate-800/80">
+          <section className="space-y-2.5 pb-4 border-b border-white/[0.08]">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                <Link2 className="w-3.5 h-3.5 text-blue-400" />
+              <h3 className="studio-section-header flex items-center gap-1.5">
+                <Link2 className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />
                 Button &amp; Link Action
               </h3>
-              <span className="text-[10px] text-slate-400">Runs in Using Mode</span>
+              <span className="text-[10.5px] text-zinc-500">Runs in Using Mode</span>
             </div>
 
             <div>
-              <label htmlFor="prop-action-type" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-action-type" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 On Click Action
               </label>
               <select
@@ -627,7 +641,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   setActionValueDraft(defaultVal);
                   applyButtonAction(nextType, defaultVal, actionTargetDraft);
                 }}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] hover:bg-[#27272a]/60 border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               >
                 <option value="none">None / Default script handler</option>
                 <option value="url">Open External URL</option>
@@ -641,7 +655,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             {actionTypeDraft === 'url' && (
               <div className="space-y-2">
                 <div>
-                  <label htmlFor="prop-action-url" className="block text-[11px] text-slate-400 mb-1">
+                  <label htmlFor="prop-action-url" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                     Destination URL
                   </label>
                   <input
@@ -655,11 +669,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       applyButtonAction('url', actionValueDraft, actionTargetDraft)
                     }
                     placeholder="https://example.com"
-                    className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1.5 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                    className="w-full rounded-lg bg-[#18181b] hover:bg-[#27272a]/50 border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                   />
                 </div>
                 <div>
-                  <label htmlFor="prop-action-target" className="block text-[11px] text-slate-400 mb-1">
+                  <label htmlFor="prop-action-target" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                     Open In
                   </label>
                   <select
@@ -669,7 +683,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       setActionTargetDraft(e.target.value);
                       applyButtonAction('url', actionValueDraft, e.target.value);
                     }}
-                    className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
+                    className="w-full rounded-lg bg-[#18181b] hover:bg-[#27272a]/60 border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                   >
                     <option value="_blank">New Tab (_blank)</option>
                     <option value="_self">Same Frame (_self)</option>
@@ -681,7 +695,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             {actionTypeDraft === 'page' && (
               <div className="space-y-2">
                 <div>
-                  <label htmlFor="prop-action-page" className="block text-[11px] text-slate-400 mb-1">
+                  <label htmlFor="prop-action-page" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                     Target App Page
                   </label>
                   <select
@@ -691,7 +705,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       setActionValueDraft(e.target.value);
                       applyButtonAction('page', e.target.value, actionTargetDraft);
                     }}
-                    className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1.5 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                    className="w-full rounded-lg bg-[#18181b] hover:bg-[#27272a]/60 border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                   >
                     {htmlPages.map((page) => (
                       <option key={page} value={page}>
@@ -707,7 +721,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     value={newPageName}
                     onChange={(e) => setNewPageName(e.target.value)}
                     placeholder="New page (e.g. about.html)"
-                    className="flex-1 min-w-0 rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-blue-500"
+                    className="flex-1 min-w-0 rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] text-[#e4e4e7] placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                   />
                   <button
                     type="button"
@@ -719,9 +733,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       onCreatePageAndLink(normalized);
                       setNewPageName('');
                     }}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-[11px] font-medium text-white shrink-0 cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-gradient-to-b from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 text-[11.5px] font-semibold text-white shrink-0 cursor-pointer"
                   >
-                    <Plus className="w-3 h-3" />
+                    <Plus className="w-3 h-3" strokeWidth={1.5} />
                     Page
                   </button>
                 </div>
@@ -730,7 +744,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
             {(actionTypeDraft === 'scroll' || actionTypeDraft === 'toggle') && (
               <div className="space-y-1.5">
-                <label htmlFor="prop-action-target-id" className="block text-[11px] text-slate-400">
+                <label htmlFor="prop-action-target-id" className="block text-[12.5px] font-medium text-[#e4e4e7]">
                   Target Section / Element ID
                 </label>
                 {sectionIds.length > 0 && (
@@ -744,7 +758,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       setActionValueDraft(e.target.value);
                       applyButtonAction(actionTypeDraft, e.target.value, actionTargetDraft);
                     }}
-                    className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                    className="w-full rounded-lg bg-[#18181b] hover:bg-[#27272a]/60 border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                   >
                     <option value="">Pick an element ID...</option>
                     {sectionIds.map((s) => (
@@ -767,14 +781,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     applyButtonAction(actionTypeDraft, actionValueDraft, actionTargetDraft)
                   }
                   placeholder="#section-id"
-                  className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                  className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                 />
               </div>
             )}
 
             {actionTypeDraft === 'alert' && (
               <div>
-                <label htmlFor="prop-action-alert" className="block text-[11px] text-slate-400 mb-1">
+                <label htmlFor="prop-action-alert" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                   Message Text
                 </label>
                 <input
@@ -788,7 +802,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     applyButtonAction('alert', actionValueDraft, actionTargetDraft)
                   }
                   placeholder="Saved successfully!"
-                  className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
+                  className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                 />
               </div>
             )}
@@ -799,15 +813,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         {isTableTag && (
           <section
             aria-label="Table Inspector"
-            className="space-y-3 pb-4 border-b border-slate-800/80"
+            className="space-y-3 pb-4 border-b border-white/[0.08]"
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                <Table2 className="w-3.5 h-3.5 text-emerald-400" />
+              <h3 className="studio-section-header flex items-center gap-1.5">
+                <Table2 className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.5} />
                 Table
               </h3>
               {tableMetrics && (
-                <span className="font-mono-tabular text-[11px] text-slate-400">
+                <span className="font-mono-tabular text-[12px] text-zinc-400">
                   {tableMetrics.rows} rows × {tableMetrics.cols} cols
                 </span>
               )}
@@ -818,35 +832,35 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <button
                 type="button"
                 onClick={onAddTableRow}
-                className="inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-medium text-slate-100 transition-colors cursor-pointer"
+                className="inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] transition-colors cursor-pointer"
               >
-                <Plus className="w-3 h-3 text-emerald-400" />
+                <Plus className="w-3 h-3 text-emerald-400" strokeWidth={1.5} />
                 Add Row
               </button>
               <button
                 type="button"
                 disabled={!tableMetrics || tableMetrics.rows <= 1}
                 onClick={onRemoveTableRow}
-                className="inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-medium text-slate-100 disabled:opacity-40 transition-colors cursor-pointer"
+                className="inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] disabled:opacity-40 transition-colors cursor-pointer"
               >
-                <Minus className="w-3 h-3 text-red-400" />
+                <Minus className="w-3 h-3 text-red-400" strokeWidth={1.5} />
                 Remove Row
               </button>
               <button
                 type="button"
                 onClick={onAddTableColumn}
-                className="inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-medium text-slate-100 transition-colors cursor-pointer"
+                className="inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] transition-colors cursor-pointer"
               >
-                <Plus className="w-3 h-3 text-blue-400" />
+                <Plus className="w-3 h-3 text-indigo-400" strokeWidth={1.5} />
                 Add Column
               </button>
               <button
                 type="button"
                 disabled={!tableMetrics || tableMetrics.cols <= 1}
                 onClick={onRemoveTableColumn}
-                className="inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-[11px] font-medium text-slate-100 disabled:opacity-40 transition-colors cursor-pointer"
+                className="inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] disabled:opacity-40 transition-colors cursor-pointer"
               >
-                <Minus className="w-3 h-3 text-red-400" />
+                <Minus className="w-3 h-3 text-red-400" strokeWidth={1.5} />
                 Remove Column
               </button>
             </div>
@@ -854,7 +868,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             {/* Cell Padding */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label htmlFor="table-cell-padding" className="text-[11px] text-slate-400">
+                <label htmlFor="table-cell-padding" className="text-[12.5px] font-medium text-[#e4e4e7]">
                   Cell Padding
                 </label>
                 <div className="flex items-center gap-1">
@@ -873,10 +887,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                           `Set table cell padding (${preset.label})`
                         );
                       }}
-                      className={`px-1.5 py-0.5 rounded text-[10px] border transition-colors cursor-pointer ${
+                      className={`px-1.5 py-0.5 rounded-md text-[10.5px] border transition-colors cursor-pointer ${
                         cellPaddingDraft === preset.val
-                          ? 'bg-blue-600/20 border-blue-500/50 text-blue-300'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                          ? 'bg-indigo-500/20 border-indigo-500/45 text-indigo-300'
+                          : 'bg-[#18181b] border-white/[0.08] text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a]'
                       }`}
                     >
                       {preset.label}
@@ -897,15 +911,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   onUpdateTableCellStyles({ padding: cellPaddingDraft }, 'Update table cell padding')
                 }
                 placeholder="e.g. 10px 12px"
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
 
             {/* Cell Alignment */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <span className="block text-[11px] text-slate-400 mb-1">Cell Horiz. Align</span>
-                <div className="grid grid-cols-3 gap-0.5 bg-slate-900 border border-slate-700/80 rounded p-0.5">
+                <span className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">Cell Horiz. Align</span>
+                <div className="grid grid-cols-3 gap-0.5 bg-[#09090b] border border-white/[0.08] rounded-lg p-0.5">
                   {[
                     { val: 'left', icon: AlignLeft, label: 'Cell align left' },
                     { val: 'center', icon: AlignCenter, label: 'Cell align center' },
@@ -918,21 +932,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       onClick={() =>
                         onUpdateTableCellStyles({ 'text-align': val }, `Table cell align ${val}`)
                       }
-                      className={`flex items-center justify-center py-1 rounded text-xs cursor-pointer ${
+                      className={`flex items-center justify-center py-1 rounded-md text-xs cursor-pointer ${
                         tableMetrics?.cellAlign === val
-                          ? 'bg-slate-700 text-white'
-                          : 'text-slate-400 hover:text-slate-200'
+                          ? 'bg-[#27272a] text-white'
+                          : 'text-zinc-400 hover:text-zinc-100'
                       }`}
                     >
-                      <Icon className="w-3.5 h-3.5" />
+                      <Icon className="w-3.5 h-3.5" strokeWidth={1.5} />
                     </button>
                   ))}
                 </div>
               </div>
 
               <div>
-                <span className="block text-[11px] text-slate-400 mb-1">Cell Vert. Align</span>
-                <div className="grid grid-cols-3 gap-0.5 bg-slate-900 border border-slate-700/80 rounded p-0.5">
+                <span className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">Cell Vert. Align</span>
+                <div className="grid grid-cols-3 gap-0.5 bg-[#09090b] border border-white/[0.08] rounded-lg p-0.5">
                   {[
                     { val: 'top', icon: AlignVerticalJustifyStart, label: 'Cell vertical align top' },
                     { val: 'middle', icon: AlignVerticalJustifyCenter, label: 'Cell vertical align middle' },
@@ -948,13 +962,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                           `Table cell vertical align ${val}`
                         )
                       }
-                      className={`flex items-center justify-center py-1 rounded text-xs cursor-pointer ${
+                      className={`flex items-center justify-center py-1 rounded-md text-xs cursor-pointer ${
                         tableMetrics?.cellVAlign === val
-                          ? 'bg-slate-700 text-white'
-                          : 'text-slate-400 hover:text-slate-200'
+                          ? 'bg-[#27272a] text-white'
+                          : 'text-zinc-400 hover:text-zinc-100'
                       }`}
                     >
-                      <Icon className="w-3.5 h-3.5" />
+                      <Icon className="w-3.5 h-3.5" strokeWidth={1.5} />
                     </button>
                   ))}
                 </div>
@@ -963,15 +977,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
             {/* Table Style Options */}
             <div className="flex items-center justify-between pt-0.5">
-              <span className="text-[11px] text-slate-400">Alternating Row Shading</span>
+              <span className="text-[12.5px] font-medium text-[#e4e4e7]">Alternating Row Shading</span>
               <button
                 type="button"
                 aria-pressed={Boolean(tableMetrics?.isStriped)}
                 onClick={() => onToggleTableStriped(!tableMetrics?.isStriped)}
-                className={`px-2.5 py-1 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
+                className={`px-2.5 py-1 rounded-lg text-[11.5px] font-medium border transition-colors cursor-pointer ${
                   tableMetrics?.isStriped
-                    ? 'bg-emerald-600/20 border-emerald-500/40 text-emerald-300'
-                    : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                    : 'bg-[#18181b] border-white/[0.08] text-zinc-300 hover:bg-[#27272a]'
                 }`}
               >
                 {tableMetrics?.isStriped ? 'Striped: On' : 'Striped: Off'}
@@ -981,49 +995,49 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         )}
 
         {/* Per-Device Visibility */}
-        <section className="space-y-2 pb-4 border-b border-slate-800/80">
+        <section className="space-y-2 pb-4 border-b border-white/[0.08]">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-slate-200">Device Visibility</h3>
-            <span className="text-[11px] text-slate-500">Show / hide per screen</span>
+            <h3 className="studio-section-header">Device Visibility</h3>
+            <span className="text-[11px] text-zinc-500">Per screen</span>
           </div>
           <div className="grid grid-cols-3 gap-1.5">
             <button
               type="button"
               onClick={() => onToggleDeviceVisibility('desktop')}
               aria-pressed={deviceVisibility.desktop}
-              className={`inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded border text-[11px] font-medium transition-colors cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg border studio-card-highlight text-[11.5px] font-medium transition-colors cursor-pointer ${
                 deviceVisibility.desktop
-                  ? 'bg-slate-800/80 border-slate-700 text-slate-100'
+                  ? 'bg-[#18181b] hover:bg-[#27272a] border-white/[0.08] text-[#e4e4e7]'
                   : 'bg-red-500/10 border-red-500/30 text-red-300 line-through'
               }`}
             >
-              <Laptop className="w-3 h-3" />
+              <Laptop className="w-3.5 h-3.5" strokeWidth={1.5} />
               Desktop
             </button>
             <button
               type="button"
               onClick={() => onToggleDeviceVisibility('tablet')}
               aria-pressed={deviceVisibility.tablet}
-              className={`inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded border text-[11px] font-medium transition-colors cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg border studio-card-highlight text-[11.5px] font-medium transition-colors cursor-pointer ${
                 deviceVisibility.tablet
-                  ? 'bg-slate-800/80 border-slate-700 text-slate-100'
+                  ? 'bg-[#18181b] hover:bg-[#27272a] border-white/[0.08] text-[#e4e4e7]'
                   : 'bg-red-500/10 border-red-500/30 text-red-300 line-through'
               }`}
             >
-              <Tablet className="w-3 h-3" />
+              <Tablet className="w-3.5 h-3.5" strokeWidth={1.5} />
               Tablet
             </button>
             <button
               type="button"
               onClick={() => onToggleDeviceVisibility('mobile')}
               aria-pressed={deviceVisibility.mobile}
-              className={`inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded border text-[11px] font-medium transition-colors cursor-pointer ${
+              className={`inline-flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg border studio-card-highlight text-[11.5px] font-medium transition-colors cursor-pointer ${
                 deviceVisibility.mobile
-                  ? 'bg-slate-800/80 border-slate-700 text-slate-100'
+                  ? 'bg-[#18181b] hover:bg-[#27272a] border-white/[0.08] text-[#e4e4e7]'
                   : 'bg-red-500/10 border-red-500/30 text-red-300 line-through'
               }`}
             >
-              <Smartphone className="w-3 h-3" />
+              <Smartphone className="w-3.5 h-3.5" strokeWidth={1.5} />
               Mobile
             </button>
           </div>
@@ -1031,10 +1045,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
         {/* Text Content */}
         {selectedElement.isTextEditable && (
-          <section className="space-y-2 pb-4 border-b border-slate-800/80">
+          <section className="space-y-2 pb-4 border-b border-white/[0.08]">
             <label
               htmlFor="inspector-text-content"
-              className="block text-xs font-semibold text-slate-200"
+              className="block studio-section-header"
             >
               Text Content
             </label>
@@ -1054,7 +1068,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 }, 300);
               }}
               onBlur={() => commitTextIfChanged(textDraft)}
-              className="w-full rounded-md bg-slate-900 border border-slate-700/80 px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500 resize-y"
+              className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12.5px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 resize-y"
             />
           </section>
         )}
@@ -1063,15 +1077,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         {isSvgShape && (
           <section
             aria-label="Shape Properties"
-            className="space-y-3 pb-4 border-b border-slate-800/80"
+            className="space-y-3 pb-4 border-b border-white/[0.08]"
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                <Shapes className="w-3.5 h-3.5 text-sky-400" />
+              <h3 className="studio-section-header flex items-center gap-1.5">
+                <Shapes className="w-3.5 h-3.5 text-cyan-400" strokeWidth={1.5} />
                 Shape Properties
               </h3>
               {selectedElement.svgShape && (
-                <span className="font-mono-tabular text-[10px] text-slate-400">
+                <span className="font-mono-tabular text-[11px] text-zinc-400">
                   &lt;{selectedElement.svgShape.childTag}&gt; · {selectedElement.svgShape.viewBox}
                 </span>
               )}
@@ -1080,7 +1094,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             {/* Fill Color */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label htmlFor="prop-shape-fill" className="text-[11px] text-slate-400">
+                <label htmlFor="prop-shape-fill" className="text-[12.5px] font-medium text-[#e4e4e7]">
                   Fill Color
                 </label>
                 <button
@@ -1090,30 +1104,38 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     onPreviewSvgShape({ fill: 'none' });
                     onCommitSvgShape({ fill: 'none' }, 'Clear shape fill');
                   }}
-                  className="text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer"
+                  className="text-[11px] text-zinc-400 hover:text-zinc-100 cursor-pointer"
                 >
                   Transparent
                 </button>
               </div>
-              <div className="flex items-center gap-2">
-                <input
-                  id="prop-shape-fill"
-                  type="color"
-                  value={cssColorToHex(shapeFillDraft) || '#3b82f6'}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setShapeFillDraft(val);
-                    onPreviewSvgShape({ fill: val });
-                    if (colorCommitTimerRef.current !== null) {
-                      window.clearTimeout(colorCommitTimerRef.current);
-                    }
-                    colorCommitTimerRef.current = window.setTimeout(() => {
-                      onCommitSvgShape({ fill: val }, 'Update shape fill');
-                      colorCommitTimerRef.current = null;
-                    }, 200);
+              <div className="flex items-center gap-2 rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/60">
+                <span
+                  className="relative w-5 h-5 rounded-md border border-white/[0.15] shrink-0 overflow-hidden cursor-pointer"
+                  style={{
+                    backgroundColor:
+                      shapeFillDraft === 'none' ? 'transparent' : cssColorToHex(shapeFillDraft) || '#3b82f6',
                   }}
-                  className="w-8 h-7 rounded bg-transparent border border-slate-700 cursor-pointer shrink-0"
-                />
+                >
+                  <input
+                    id="prop-shape-fill"
+                    type="color"
+                    value={cssColorToHex(shapeFillDraft) || '#3b82f6'}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setShapeFillDraft(val);
+                      onPreviewSvgShape({ fill: val });
+                      if (colorCommitTimerRef.current !== null) {
+                        window.clearTimeout(colorCommitTimerRef.current);
+                      }
+                      colorCommitTimerRef.current = window.setTimeout(() => {
+                        onCommitSvgShape({ fill: val }, 'Update shape fill');
+                        colorCommitTimerRef.current = null;
+                      }, 200);
+                    }}
+                    className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                  />
+                </span>
                 <input
                   type="text"
                   aria-label="Shape fill value"
@@ -1129,7 +1151,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       onCommitSvgShape({ fill: shapeFillDraft }, 'Update shape fill');
                     }
                   }}
-                  className="flex-1 rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                  className="flex-1 min-w-0 bg-transparent text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none"
                 />
               </div>
             </div>
@@ -1138,7 +1160,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             <div className="grid grid-cols-3 gap-2">
               <div className="col-span-2">
                 <div className="flex items-center justify-between mb-1">
-                  <label htmlFor="prop-shape-stroke" className="text-[11px] text-slate-400">
+                  <label htmlFor="prop-shape-stroke" className="text-[12.5px] font-medium text-[#e4e4e7]">
                     Stroke Color
                   </label>
                   <button
@@ -1149,32 +1171,42 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       onPreviewSvgShape({ stroke: 'none', strokeWidth: '0' });
                       onCommitSvgShape({ stroke: 'none', strokeWidth: '0' }, 'Remove shape stroke');
                     }}
-                    className="text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer"
+                    className="text-[11px] text-zinc-400 hover:text-zinc-100 cursor-pointer"
                   >
                     None
                   </button>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <input
-                    id="prop-shape-stroke"
-                    type="color"
-                    value={cssColorToHex(shapeStrokeDraft) || '#1d4ed8'}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setShapeStrokeDraft(val);
-                      const nextW = Number(shapeStrokeWidthDraft) > 0 ? shapeStrokeWidthDraft : '3';
-                      setShapeStrokeWidthDraft(nextW);
-                      onPreviewSvgShape({ stroke: val, strokeWidth: nextW });
-                      if (colorCommitTimerRef.current !== null) {
-                        window.clearTimeout(colorCommitTimerRef.current);
-                      }
-                      colorCommitTimerRef.current = window.setTimeout(() => {
-                        onCommitSvgShape({ stroke: val, strokeWidth: nextW }, 'Update shape stroke');
-                        colorCommitTimerRef.current = null;
-                      }, 200);
+                <div className="flex items-center gap-1.5 rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/60">
+                  <span
+                    className="relative w-5 h-5 rounded-md border border-white/[0.15] shrink-0 overflow-hidden cursor-pointer"
+                    style={{
+                      backgroundColor:
+                        shapeStrokeDraft === 'none'
+                          ? 'transparent'
+                          : cssColorToHex(shapeStrokeDraft) || '#1d4ed8',
                     }}
-                    className="w-8 h-7 rounded bg-transparent border border-slate-700 cursor-pointer shrink-0"
-                  />
+                  >
+                    <input
+                      id="prop-shape-stroke"
+                      type="color"
+                      value={cssColorToHex(shapeStrokeDraft) || '#1d4ed8'}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setShapeStrokeDraft(val);
+                        const nextW = Number(shapeStrokeWidthDraft) > 0 ? shapeStrokeWidthDraft : '3';
+                        setShapeStrokeWidthDraft(nextW);
+                        onPreviewSvgShape({ stroke: val, strokeWidth: nextW });
+                        if (colorCommitTimerRef.current !== null) {
+                          window.clearTimeout(colorCommitTimerRef.current);
+                        }
+                        colorCommitTimerRef.current = window.setTimeout(() => {
+                          onCommitSvgShape({ stroke: val, strokeWidth: nextW }, 'Update shape stroke');
+                          colorCommitTimerRef.current = null;
+                        }, 200);
+                      }}
+                      className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                    />
+                  </span>
                   <input
                     type="text"
                     aria-label="Shape stroke value"
@@ -1190,13 +1222,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         onCommitSvgShape({ stroke: shapeStrokeDraft }, 'Update shape stroke');
                       }
                     }}
-                    className="w-full min-w-0 rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                    className="w-full min-w-0 bg-transparent text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none"
                   />
                 </div>
               </div>
 
               <div>
-                <label htmlFor="prop-shape-stroke-width" className="block text-[11px] text-slate-400 mb-1">
+                <label htmlFor="prop-shape-stroke-width" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                   Stroke W.
                 </label>
                 <input
@@ -1216,7 +1248,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     e.key === 'Enter' &&
                     onCommitSvgShape({ strokeWidth: shapeStrokeWidthDraft }, 'Update stroke width')
                   }
-                  className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                  className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                 />
               </div>
             </div>
@@ -1224,11 +1256,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             {/* Path / Points / Geometry Data */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <label htmlFor="prop-shape-path" className="text-[11px] text-slate-400">
+                <label htmlFor="prop-shape-path" className="text-[12.5px] font-medium text-[#e4e4e7]">
                   {selectedElement.svgShape?.dataMode === 'points'
-                    ? 'Polygon Points (or SVG Path M...)'
+                    ? 'Polygon Points'
                     : selectedElement.svgShape?.dataMode === 'circle'
-                      ? 'Circle (cx, cy, r) or Path Data (M...)'
+                      ? 'Circle / Path Data'
                       : 'SVG Path Data (d)'}
                 </label>
                 <button
@@ -1237,7 +1269,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     onPreviewSvgShape({ pathData: shapePathDraft });
                     onCommitSvgShape({ pathData: shapePathDraft }, 'Update shape path data');
                   }}
-                  className="text-[11px] text-blue-400 hover:text-blue-300 font-medium cursor-pointer"
+                  className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer"
                 >
                   Apply Path
                 </button>
@@ -1253,7 +1285,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 }}
                 onBlur={() => onCommitSvgShape({ pathData: shapePathDraft }, 'Update shape path data')}
                 placeholder="e.g. M 50,5 L 95,94 L 5,94 Z or 50,5 95,94 5,94"
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1.5 text-[11px] font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500 resize-y"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 resize-y"
               />
               <div className="flex flex-wrap items-center gap-1">
                 {[
@@ -1273,7 +1305,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         `Set ${preset.label} path`
                       );
                     }}
-                    className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] text-slate-300 cursor-pointer"
+                    className="px-2 py-0.5 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] text-[10.5px] text-zinc-300 cursor-pointer"
                   >
                     {preset.label}
                   </button>
@@ -1285,172 +1317,177 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
         {/* Typography (MS 365 Extended) */}
         {!isSvgShape && (
-          <section className="space-y-3 pb-4 border-b border-slate-800/80">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-slate-200">Typography</h3>
-            <div className="inline-flex items-center gap-0.5 bg-slate-900 border border-slate-700/80 rounded p-0.5">
-              <button
-                type="button"
-                aria-label="Inspector Bold"
-                aria-pressed={isBold}
-                onClick={() => commitField('font-weight', isBold ? '400' : '700', 'Toggle bold')}
-                className={`p-1 rounded text-xs cursor-pointer ${
-                  isBold ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <Bold className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                aria-label="Inspector Italic"
-                aria-pressed={isItalic}
-                onClick={() =>
-                  commitField('font-style', isItalic ? 'normal' : 'italic', 'Toggle italic')
-                }
-                className={`p-1 rounded text-xs cursor-pointer ${
-                  isItalic ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <Italic className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                aria-label="Inspector Underline"
-                aria-pressed={isUnderline}
-                onClick={() => toggleTextDeco('underline')}
-                className={`p-1 rounded text-xs cursor-pointer ${
-                  isUnderline ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <Underline className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                aria-label="Inspector Strikethrough"
-                aria-pressed={isStrike}
-                onClick={() => toggleTextDeco('line-through')}
-                className={`p-1 rounded text-xs cursor-pointer ${
-                  isStrike ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-100'
-                }`}
-              >
-                <Strikethrough className="w-3 h-3" />
-              </button>
+          <section className="space-y-3 pb-4 border-b border-white/[0.08]">
+            <div className="flex items-center justify-between">
+              <h3 className="studio-section-header">Typography</h3>
+              <div className="inline-flex items-center gap-0.5 bg-[#09090b] border border-white/[0.08] rounded-lg p-0.5">
+                <button
+                  type="button"
+                  aria-label="Inspector Bold"
+                  aria-pressed={isBold}
+                  onClick={() => commitField('font-weight', isBold ? '400' : '700', 'Toggle bold')}
+                  className={`p-1 rounded-md text-xs cursor-pointer ${
+                    isBold ? 'bg-indigo-500 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                  }`}
+                >
+                  <Bold className="w-3.5 h-3.5" strokeWidth={1.5} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Inspector Italic"
+                  aria-pressed={isItalic}
+                  onClick={() =>
+                    commitField('font-style', isItalic ? 'normal' : 'italic', 'Toggle italic')
+                  }
+                  className={`p-1 rounded-md text-xs cursor-pointer ${
+                    isItalic ? 'bg-indigo-500 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                  }`}
+                >
+                  <Italic className="w-3.5 h-3.5" strokeWidth={1.5} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Inspector Underline"
+                  aria-pressed={isUnderline}
+                  onClick={() => toggleTextDeco('underline')}
+                  className={`p-1 rounded-md text-xs cursor-pointer ${
+                    isUnderline ? 'bg-indigo-500 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                  }`}
+                >
+                  <Underline className="w-3.5 h-3.5" strokeWidth={1.5} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Inspector Strikethrough"
+                  aria-pressed={isStrike}
+                  onClick={() => toggleTextDeco('line-through')}
+                  className={`p-1 rounded-md text-xs cursor-pointer ${
+                    isStrike ? 'bg-indigo-500 text-white' : 'text-zinc-400 hover:text-zinc-100'
+                  }`}
+                >
+                  <Strikethrough className="w-3.5 h-3.5" strokeWidth={1.5} />
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div>
-            <label htmlFor="prop-font-family" className="block text-[11px] text-slate-400 mb-1">
-              Font Family
-            </label>
-            <select
-              id="prop-font-family"
-              value={effectiveFontFamily}
-              onChange={(e) => commitField('font-family', e.target.value, 'Update font family')}
-              className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
-            >
-              {FONT_FAMILY_OPTIONS.map((f) => (
-                <option key={f.label} value={f.value}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
             <div>
-              <label htmlFor="prop-font-size" className="block text-[11px] text-slate-400 mb-1">
-                Size (pt/px)
-              </label>
-              <input
-                id="prop-font-size"
-                list="point-size-presets"
-                type="text"
-                value={fontSizeDraft}
-                onChange={(e) => setFontSizeDraft(e.target.value)}
-                onBlur={() => commitField('font-size', fontSizeDraft, 'Update font size')}
-                onKeyDown={(e) =>
-                  e.key === 'Enter' && commitField('font-size', fontSizeDraft, 'Update font size')
-                }
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
-              />
-              <datalist id="point-size-presets">
-                {POINT_PRESETS.map((pt) => (
-                  <option key={pt} value={pt} />
-                ))}
-              </datalist>
-            </div>
-            <div>
-              <label htmlFor="prop-font-weight" className="block text-[11px] text-slate-400 mb-1">
-                Weight
+              <label htmlFor="prop-font-family" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
+                Font Family
               </label>
               <select
-                id="prop-font-weight"
-                value={effectiveFontWeight}
-                onChange={(e) => commitField('font-weight', e.target.value, 'Update font weight')}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-1.5 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                id="prop-font-family"
+                value={effectiveFontFamily}
+                onChange={(e) => commitField('font-family', e.target.value, 'Update font family')}
+                className="w-full rounded-lg bg-[#18181b] hover:bg-[#27272a]/60 border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               >
-                <option value="400">400</option>
-                <option value="500">500</option>
-                <option value="600">600</option>
-                <option value="700">700</option>
+                {FONT_FAMILY_OPTIONS.map((f) => (
+                  <option key={f.label} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
               </select>
             </div>
-            <div>
-              <label htmlFor="prop-line-height" className="block text-[11px] text-slate-400 mb-1">
-                Line H.
-              </label>
-              <input
-                id="prop-line-height"
-                type="text"
-                value={lineHeightDraft}
-                onChange={(e) => setLineHeightDraft(e.target.value)}
-                onBlur={() => commitField('line-height', lineHeightDraft, 'Update line height')}
-                onKeyDown={(e) =>
-                  e.key === 'Enter' &&
-                  commitField('line-height', lineHeightDraft, 'Update line height')
-                }
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          </div>
 
-          <div>
-            <label htmlFor="prop-text-color" className="block text-[11px] text-slate-400 mb-1">
-              Text Color
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                id="prop-text-color"
-                type="color"
-                value={textColorHex}
-                onChange={(e) => scheduleColorCommit('color', e.target.value, 'Update text color')}
-                className="w-8 h-7 rounded bg-transparent border border-slate-700 cursor-pointer shrink-0"
-              />
-              <input
-                type="text"
-                aria-label="Text color hex"
-                value={textColorHex}
-                onChange={(e) => commitField('color', e.target.value, 'Update text color')}
-                className="flex-1 rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
-              />
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label htmlFor="prop-font-size" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
+                  Size
+                </label>
+                <input
+                  id="prop-font-size"
+                  list="point-size-presets"
+                  type="text"
+                  value={fontSizeDraft}
+                  onChange={(e) => setFontSizeDraft(e.target.value)}
+                  onBlur={() => commitField('font-size', fontSizeDraft, 'Update font size')}
+                  onKeyDown={(e) =>
+                    e.key === 'Enter' && commitField('font-size', fontSizeDraft, 'Update font size')
+                  }
+                  className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                />
+                <datalist id="point-size-presets">
+                  {POINT_PRESETS.map((pt) => (
+                    <option key={pt} value={pt} />
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <label htmlFor="prop-font-weight" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
+                  Weight
+                </label>
+                <select
+                  id="prop-font-weight"
+                  value={effectiveFontWeight}
+                  onChange={(e) => commitField('font-weight', e.target.value, 'Update font weight')}
+                  className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-1.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                >
+                  <option value="400">400</option>
+                  <option value="500">500</option>
+                  <option value="600">600</option>
+                  <option value="700">700</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="prop-line-height" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
+                  Line H.
+                </label>
+                <input
+                  id="prop-line-height"
+                  type="text"
+                  value={lineHeightDraft}
+                  onChange={(e) => setLineHeightDraft(e.target.value)}
+                  onBlur={() => commitField('line-height', lineHeightDraft, 'Update line height')}
+                  onKeyDown={(e) =>
+                    e.key === 'Enter' &&
+                    commitField('line-height', lineHeightDraft, 'Update line height')
+                  }
+                  className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                />
+              </div>
             </div>
-          </div>
-        </section>
+
+            <div>
+              <label htmlFor="prop-text-color" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
+                Text Color
+              </label>
+              <div className="flex items-center gap-2 rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/60">
+                <span
+                  className="relative w-5 h-5 rounded-md border border-white/[0.15] shrink-0 overflow-hidden cursor-pointer shadow-xs"
+                  style={{ backgroundColor: textColorHex }}
+                >
+                  <input
+                    id="prop-text-color"
+                    type="color"
+                    value={textColorHex}
+                    onChange={(e) => scheduleColorCommit('color', e.target.value, 'Update text color')}
+                    className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                  />
+                </span>
+                <input
+                  type="text"
+                  aria-label="Text color hex"
+                  value={textColorHex}
+                  onChange={(e) => commitField('color', e.target.value, 'Update text color')}
+                  className="flex-1 min-w-0 bg-transparent text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none"
+                />
+              </div>
+            </div>
+          </section>
         )}
 
         {/* Layout & Alignment */}
-        <section className="space-y-3 pb-4 border-b border-slate-800/80">
-          <h3 className="text-xs font-semibold text-slate-200">Layout &amp; Alignment</h3>
+        <section className="space-y-3 pb-4 border-b border-white/[0.08]">
+          <h3 className="studio-section-header">Layout &amp; Alignment</h3>
           <div className="grid grid-cols-2 gap-2.5">
             <div>
-              <label htmlFor="prop-display" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-display" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Display
               </label>
               <select
                 id="prop-display"
                 value={effectiveDisplay}
                 onChange={(e) => commitField('display', e.target.value, 'Update display')}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] hover:bg-[#27272a]/60 border border-white/[0.08] studio-card-highlight px-2 py-1.5 text-[12px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               >
                 <option value="block">block</option>
                 <option value="flex">flex</option>
@@ -1462,34 +1499,52 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </select>
             </div>
             <div>
-              <label htmlFor="prop-flex-dir" className="block text-[11px] text-slate-400 mb-1">
+              <span className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Flex Direction
-              </label>
-              <select
+              </span>
+              <div
                 id="prop-flex-dir"
-                value={effectiveFlexDir}
-                onChange={(e) =>
-                  commitStylePatch(
-                    {
-                      display: effectiveDisplay.includes('flex') ? effectiveDisplay : 'flex',
-                      'flex-direction': e.target.value,
-                    },
-                    'Update flex direction'
-                  )
-                }
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
+                role="group"
+                aria-label="Flex Direction"
+                className="grid grid-cols-4 gap-0.5 bg-[#09090b] border border-white/[0.08] rounded-lg p-0.5"
               >
-                <option value="row">row</option>
-                <option value="column">column</option>
-                <option value="row-reverse">row-reverse</option>
-                <option value="column-reverse">column-reverse</option>
-              </select>
+                {[
+                  { val: 'row', icon: ArrowRight, label: 'Flex direction row', title: 'Row (→)' },
+                  { val: 'column', icon: ArrowDown, label: 'Flex direction column', title: 'Column (↓)' },
+                  { val: 'row-reverse', icon: ArrowLeft, label: 'Flex direction row-reverse', title: 'Row Reverse (←)' },
+                  { val: 'column-reverse', icon: ArrowUp, label: 'Flex direction column-reverse', title: 'Column Reverse (↑)' },
+                ].map(({ val, icon: Icon, label, title }) => (
+                  <button
+                    key={val}
+                    type="button"
+                    aria-label={label}
+                    aria-pressed={effectiveFlexDir === val}
+                    title={title}
+                    onClick={() =>
+                      commitStylePatch(
+                        {
+                          display: effectiveDisplay.includes('flex') ? effectiveDisplay : 'flex',
+                          'flex-direction': val,
+                        },
+                        'Update flex direction'
+                      )
+                    }
+                    className={`flex items-center justify-center py-1 rounded-md transition-colors cursor-pointer ${
+                      effectiveFlexDir === val
+                        ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                        : 'text-zinc-400 hover:text-zinc-100'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" strokeWidth={1.5} />
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2.5">
             <div>
-              <label htmlFor="prop-gap" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-gap" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Gap
               </label>
               <input
@@ -1499,12 +1554,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 onChange={(e) => setGapDraft(e.target.value)}
                 onBlur={() => commitField('gap', gapDraft, 'Update gap')}
                 onKeyDown={(e) => e.key === 'Enter' && commitField('gap', gapDraft, 'Update gap')}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
             <div>
-              <span className="block text-[11px] text-slate-400 mb-1">Text Align</span>
-              <div className="grid grid-cols-4 gap-0.5 bg-slate-900 border border-slate-700/80 rounded p-0.5">
+              <span className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">Text Align</span>
+              <div
+                role="group"
+                aria-label="Text Alignment"
+                className="grid grid-cols-4 gap-0.5 bg-[#09090b] border border-white/[0.08] rounded-lg p-0.5"
+              >
                 {[
                   { val: 'left', icon: AlignLeft },
                   { val: 'center', icon: AlignCenter },
@@ -1515,14 +1574,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     key={val}
                     type="button"
                     aria-label={`Align ${val}`}
+                    aria-pressed={effectiveTextAlign === val}
                     onClick={() => commitField('text-align', val, 'Update text align')}
-                    className={`flex items-center justify-center py-1 rounded text-xs cursor-pointer ${
+                    className={`flex items-center justify-center py-1 rounded-md transition-colors cursor-pointer ${
                       effectiveTextAlign === val
-                        ? 'bg-slate-700 text-white'
-                        : 'text-slate-400 hover:text-slate-200'
+                        ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
+                        : 'text-zinc-400 hover:text-zinc-100'
                     }`}
                   >
-                    <Icon className="w-3.5 h-3.5" />
+                    <Icon className="w-3.5 h-3.5" strokeWidth={1.5} />
                   </button>
                 ))}
               </div>
@@ -1531,9 +1591,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         </section>
 
         {/* Size & Position */}
-        <section className="space-y-3 pb-4 border-b border-slate-800/80">
+        <section className="space-y-3 pb-4 border-b border-white/[0.08]">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-slate-200">Dimensions &amp; Position</h3>
+            <h3 className="studio-section-header">Dimensions &amp; Position</h3>
             <button
               type="button"
               onClick={() => {
@@ -1541,7 +1601,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 setHeightDraft('auto');
                 commitStylePatch({ width: null, height: null }, 'Reset dimensions');
               }}
-              className="text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer"
+              className="text-[11px] font-medium text-zinc-400 hover:text-zinc-100 cursor-pointer"
             >
               Reset auto
             </button>
@@ -1549,7 +1609,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
           <div className="grid grid-cols-2 gap-2.5">
             <div>
-              <label htmlFor="prop-width" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-width" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Width
               </label>
               <input
@@ -1592,11 +1652,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     commitField('width', widthDraft, 'Update width');
                   }
                 }}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
             <div>
-              <label htmlFor="prop-height" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-height" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Height
               </label>
               <input
@@ -1639,29 +1699,29 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     commitField('height', heightDraft, 'Update height');
                   }
                 }}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
           </div>
 
           {/* Visual Aspect Ratio Lock Checkbox */}
-          <label className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md bg-slate-900/90 border border-slate-800 hover:border-slate-700 transition-colors cursor-pointer">
-            <span className="inline-flex items-center gap-2 text-[11px] font-medium text-slate-200">
+          <label className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg bg-[#18181b] border border-white/[0.08] hover:bg-[#27272a]/70 studio-card-highlight transition-colors cursor-pointer">
+            <span className="inline-flex items-center gap-2 text-[12.5px] font-medium text-[#e4e4e7]">
               <input
                 type="checkbox"
                 aria-label="Lock aspect ratio"
                 checked={aspectRatioLocked}
                 onChange={(e) => onToggleAspectRatioLock(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-950 accent-blue-500 cursor-pointer"
+                className="w-3.5 h-3.5 rounded border-white/[0.15] bg-[#09090b] accent-indigo-500 cursor-pointer"
               />
               {aspectRatioLocked ? (
-                <Lock className="w-3 h-3 text-blue-400" />
+                <Lock className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />
               ) : (
-                <Unlock className="w-3 h-3 text-slate-500" />
+                <Unlock className="w-3.5 h-3.5 text-zinc-500" strokeWidth={1.5} />
               )}
               Lock aspect ratio
             </span>
-            <span className="font-mono-tabular text-[10px] text-slate-400">
+            <span className="font-mono-tabular text-[12px] text-zinc-400">
               {selectedElement.rect.height > 0
                 ? `${(selectedElement.rect.width / selectedElement.rect.height).toFixed(2)}:1`
                 : '1.00:1'}
@@ -1670,14 +1730,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <label htmlFor="prop-position" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-position" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Position
               </label>
               <select
                 id="prop-position"
                 value={effectivePosition}
                 onChange={(e) => commitField('position', e.target.value, 'Update position')}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-1.5 py-1 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-1.5 py-1.5 text-[12px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               >
                 <option value="static">static</option>
                 <option value="relative">relative</option>
@@ -1685,7 +1745,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </select>
             </div>
             <div>
-              <label htmlFor="prop-left" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-left" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Left
               </label>
               <input
@@ -1694,11 +1754,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 value={leftDraft}
                 onChange={(e) => setLeftDraft(e.target.value)}
                 onBlur={() => commitField('left', leftDraft, 'Update left offset')}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
             <div>
-              <label htmlFor="prop-top" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-top" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Top
               </label>
               <input
@@ -1707,51 +1767,53 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 value={topDraft}
                 onChange={(e) => setTopDraft(e.target.value)}
                 onBlur={() => commitField('top', topDraft, 'Update top offset')}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
           </div>
 
           <div className="flex items-center justify-between pt-1">
-            <span className="text-[11px] text-slate-400">Nudge (8px)</span>
+            <span className="text-[12.5px] font-medium text-[#e4e4e7]">Nudge (8px)</span>
             <div className="inline-flex items-center gap-1">
               <button
                 type="button"
                 onClick={() => nudgePosition(-8, 0)}
                 aria-label="Nudge left"
-                className="p-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                className="p-1.5 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-zinc-200 cursor-pointer"
               >
-                <ArrowLeft className="w-3 h-3" />
+                <ArrowLeft className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
               <button
                 type="button"
                 onClick={() => nudgePosition(0, -8)}
                 aria-label="Nudge up"
-                className="p-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                className="p-1.5 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-zinc-200 cursor-pointer"
               >
-                <ArrowUp className="w-3 h-3" />
+                <ArrowUp className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
               <button
                 type="button"
                 onClick={() => nudgePosition(0, 8)}
                 aria-label="Nudge down"
-                className="p-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                className="p-1.5 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-zinc-200 cursor-pointer"
               >
-                <ArrowDown className="w-3 h-3" />
+                <ArrowDown className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
               <button
                 type="button"
                 onClick={() => nudgePosition(8, 0)}
                 aria-label="Nudge right"
-                className="p-1.5 rounded bg-slate-800/80 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                className="p-1.5 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-zinc-200 cursor-pointer"
               >
-                <ArrowRight className="w-3 h-3" />
+                <ArrowRight className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
             </div>
           </div>
 
           <div className="flex items-center justify-between pt-1">
-            <span className="text-[11px] text-slate-400">Arrange (z: {currentZIndex})</span>
+            <span className="text-[12.5px] font-medium text-[#e4e4e7]">
+              Arrange <span className="font-mono-tabular text-zinc-400">(z: {currentZIndex})</span>
+            </span>
             <div className="inline-flex items-center gap-1.5">
               <button
                 type="button"
@@ -1764,9 +1826,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     'Bring forward'
                   )
                 }
-                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-800/80 hover:bg-slate-700 text-[11px] text-slate-200 cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] cursor-pointer"
               >
-                <BringToFront className="w-3 h-3 text-blue-400" />
+                <BringToFront className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />
                 Forward
               </button>
               <button
@@ -1780,9 +1842,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     'Send backward'
                   )
                 }
-                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-800/80 hover:bg-slate-700 text-[11px] text-slate-200 cursor-pointer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] cursor-pointer"
               >
-                <SendToBack className="w-3 h-3 text-slate-400" />
+                <SendToBack className="w-3.5 h-3.5 text-zinc-400" strokeWidth={1.5} />
                 Backward
               </button>
             </div>
@@ -1790,7 +1852,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
           {/* Rotation Controls (MS 365 Arrange) */}
           <div className="flex items-center justify-between pt-1">
-            <span className="text-[11px] text-slate-400">Rotate</span>
+            <span className="text-[12.5px] font-medium text-[#e4e4e7]">Rotate</span>
             <div className="inline-flex items-center gap-1">
               {(() => {
                 const rawTf = selectedElement.inlineStyles.transform || selectedElement.styles.transform || '';
@@ -1804,15 +1866,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         commitField('transform', `rotate(${(curDeg - 15) % 360}deg)`, 'Rotate -15°')
                       }
                       aria-label="Inspector rotate left 15"
-                      className="inline-flex items-center gap-0.5 px-2 py-1 rounded bg-slate-800/80 hover:bg-slate-700 text-[11px] text-slate-200 cursor-pointer"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] text-[#e4e4e7] cursor-pointer"
                     >
-                      <RotateCcw className="w-3 h-3" />
+                      <RotateCcw className="w-3 h-3" strokeWidth={1.5} />
                       -15°
                     </button>
                     <button
                       type="button"
                       onClick={() => commitField('transform', '', 'Reset rotation')}
-                      className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-[11px] font-mono-tabular text-slate-300 cursor-pointer"
+                      className="px-2 py-1 rounded-lg bg-[#09090b] border border-white/[0.08] text-[12px] font-mono-tabular text-zinc-300 cursor-pointer"
                     >
                       {curDeg}°
                     </button>
@@ -1822,9 +1884,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         commitField('transform', `rotate(${(curDeg + 15) % 360}deg)`, 'Rotate +15°')
                       }
                       aria-label="Inspector rotate right 15"
-                      className="inline-flex items-center gap-0.5 px-2 py-1 rounded bg-slate-800/80 hover:bg-slate-700 text-[11px] text-slate-200 cursor-pointer"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] text-[#e4e4e7] cursor-pointer"
                     >
-                      <RotateCw className="w-3 h-3" />
+                      <RotateCw className="w-3 h-3" strokeWidth={1.5} />
                       +15°
                     </button>
                   </>
@@ -1835,16 +1897,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         </section>
 
         {/* Appearance */}
-        <section className="space-y-3 pb-4 border-b border-slate-800/80">
-          <h3 className="text-xs font-semibold text-slate-200">Appearance</h3>
+        <section className="space-y-3 pb-4 border-b border-white/[0.08]">
+          <h3 className="studio-section-header">Appearance</h3>
 
           {/* Opacity & Shadow Presets (MS 365 Effects) */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <label htmlFor="prop-opacity" className="text-[11px] text-slate-400">
+              <label htmlFor="prop-opacity" className="text-[12.5px] font-medium text-[#e4e4e7]">
                 Opacity
               </label>
-              <span className="font-mono-tabular text-[11px] text-slate-300">
+              <span className="font-mono-tabular text-[12px] text-zinc-300">
                 {Math.round((parseFloat(selectedElement.styles.opacity || '1') || 1) * 100)}%
               </span>
             </div>
@@ -1856,12 +1918,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               step={0.05}
               value={parseFloat(selectedElement.styles.opacity || '1') || 1}
               onChange={(e) => commitField('opacity', e.target.value === '1' ? '' : e.target.value, 'Update opacity')}
-              className="w-full accent-blue-500 cursor-pointer"
+              className="w-full accent-indigo-500 cursor-pointer"
             />
           </div>
 
-          <div className="space-y-1">
-            <span className="block text-[11px] text-slate-400">Drop Shadow</span>
+          <div className="space-y-1.5">
+            <span className="block text-[12.5px] font-medium text-[#e4e4e7]">Drop Shadow</span>
             <div className="grid grid-cols-4 gap-1">
               {[
                 { label: 'None', val: '' },
@@ -1873,7 +1935,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   key={preset.label}
                   type="button"
                   onClick={() => commitField('box-shadow', preset.val, `Shadow ${preset.label}`)}
-                  className="py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[10px] text-slate-300 cursor-pointer"
+                  className="py-1.5 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11px] font-medium text-zinc-300 cursor-pointer"
                 >
                   {preset.label}
                 </button>
@@ -1883,27 +1945,32 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label htmlFor="prop-bg-color" className="text-[11px] text-slate-400">
+              <label htmlFor="prop-bg-color" className="text-[12.5px] font-medium text-[#e4e4e7]">
                 Background Color
               </label>
               <button
                 type="button"
                 onClick={() => commitStylePatch({ 'background-color': 'transparent' }, 'Clear background')}
-                className="text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer"
+                className="text-[11px] text-zinc-400 hover:text-zinc-100 cursor-pointer"
               >
                 Transparent
               </button>
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                id="prop-bg-color"
-                type="color"
-                value={bgColorHex}
-                onChange={(e) =>
-                  scheduleColorCommit('background-color', e.target.value, 'Update background color')
-                }
-                className="w-8 h-7 rounded bg-transparent border border-slate-700 cursor-pointer shrink-0"
-              />
+            <div className="flex items-center gap-2 rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/60">
+              <span
+                className="relative w-5 h-5 rounded-md border border-white/[0.15] shrink-0 overflow-hidden cursor-pointer shadow-xs"
+                style={{ backgroundColor: bgColorHex }}
+              >
+                <input
+                  id="prop-bg-color"
+                  type="color"
+                  value={bgColorHex}
+                  onChange={(e) =>
+                    scheduleColorCommit('background-color', e.target.value, 'Update background color')
+                  }
+                  className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                />
+              </span>
               <input
                 type="text"
                 aria-label="Background color value"
@@ -1915,14 +1982,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 onChange={(e) =>
                   commitField('background-color', e.target.value, 'Update background color')
                 }
-                className="flex-1 rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="flex-1 min-w-0 bg-transparent text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none"
               />
             </div>
           </div>
 
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <label htmlFor="prop-border-width" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-border-width" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Border
               </label>
               <input
@@ -1937,18 +2004,18 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   }
                   commitStylePatch(patch, 'Update border width');
                 }}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
             <div>
-              <label htmlFor="prop-border-style" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-border-style" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Style
               </label>
               <select
                 id="prop-border-style"
                 value={effectiveBorderStyle}
                 onChange={(e) => commitField('border-style', e.target.value, 'Update border style')}
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-1.5 py-1 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-1.5 py-1.5 text-[12px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               >
                 <option value="none">none</option>
                 <option value="solid">solid</option>
@@ -1957,23 +2024,33 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </select>
             </div>
             <div>
-              <label htmlFor="prop-border-color" className="block text-[11px] text-slate-400 mb-1">
+              <label htmlFor="prop-border-color" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
                 Color
               </label>
-              <input
-                id="prop-border-color"
-                type="color"
-                value={borderColorHex}
-                onChange={(e) =>
-                  scheduleColorCommit('border-color', e.target.value, 'Update border color')
-                }
-                className="w-full h-7 rounded bg-transparent border border-slate-700 cursor-pointer"
-              />
+              <div className="flex items-center gap-1.5 rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-1.5 py-1 focus-within:border-indigo-500">
+                <span
+                  className="relative w-5 h-5 rounded-md border border-white/[0.15] shrink-0 overflow-hidden cursor-pointer"
+                  style={{ backgroundColor: borderColorHex }}
+                >
+                  <input
+                    id="prop-border-color"
+                    type="color"
+                    value={borderColorHex}
+                    onChange={(e) =>
+                      scheduleColorCommit('border-color', e.target.value, 'Update border color')
+                    }
+                    className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                  />
+                </span>
+                <span className="font-mono-tabular text-[11px] text-zinc-400 truncate">
+                  {borderColorHex}
+                </span>
+              </div>
             </div>
           </div>
 
           <div>
-            <label htmlFor="prop-border-radius" className="block text-[11px] text-slate-400 mb-1">
+            <label htmlFor="prop-border-radius" className="block text-[12.5px] font-medium text-[#e4e4e7] mb-1">
               Border Radius
             </label>
             <input
@@ -1986,17 +2063,32 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 e.key === 'Enter' &&
                 commitField('border-radius', borderRadiusDraft, 'Update border radius')
               }
-              className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+              className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
             />
           </div>
         </section>
 
         {/* Spacing */}
         <section className="space-y-3 pb-2">
-          <h3 className="text-xs font-semibold text-slate-200">Spacing</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="studio-section-header">Spacing</h3>
+            <div className="flex items-center gap-2 text-[11px] font-mono-tabular">
+              <span className="inline-flex items-center gap-1 text-emerald-400">
+                <span className="w-2 h-2 rounded-xs bg-emerald-500/70 inline-block" />
+                Pad
+              </span>
+              <span className="inline-flex items-center gap-1 text-amber-400">
+                <span className="w-2 h-2 rounded-xs bg-amber-500/70 inline-block" />
+                Margin
+              </span>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-2.5">
-            <div>
-              <label htmlFor="prop-padding" className="block text-[11px] text-slate-400 mb-1">
+            <div
+              onMouseEnter={() => onHoverSpacing('padding')}
+              onMouseLeave={() => onHoverSpacing(null)}
+            >
+              <label htmlFor="prop-padding" className="block text-[12.5px] font-medium text-emerald-300/90 mb-1">
                 Padding
               </label>
               <input
@@ -2004,15 +2096,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 type="text"
                 value={paddingDraft}
                 onChange={(e) => setPaddingDraft(e.target.value)}
-                onBlur={() => commitField('padding', paddingDraft, 'Update padding')}
+                onFocus={() => onHoverSpacing('padding')}
+                onBlur={() => {
+                  onHoverSpacing(null);
+                  commitField('padding', paddingDraft, 'Update padding');
+                }}
                 onKeyDown={(e) =>
                   e.key === 'Enter' && commitField('padding', paddingDraft, 'Update padding')
                 }
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50"
               />
             </div>
-            <div>
-              <label htmlFor="prop-margin" className="block text-[11px] text-slate-400 mb-1">
+            <div
+              onMouseEnter={() => onHoverSpacing('margin')}
+              onMouseLeave={() => onHoverSpacing(null)}
+            >
+              <label htmlFor="prop-margin" className="block text-[12.5px] font-medium text-amber-300/90 mb-1">
                 Margin
               </label>
               <input
@@ -2020,11 +2119,15 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 type="text"
                 value={marginDraft}
                 onChange={(e) => setMarginDraft(e.target.value)}
-                onBlur={() => commitField('margin', marginDraft, 'Update margin')}
+                onFocus={() => onHoverSpacing('margin')}
+                onBlur={() => {
+                  onHoverSpacing(null);
+                  commitField('margin', marginDraft, 'Update margin');
+                }}
                 onKeyDown={(e) =>
                   e.key === 'Enter' && commitField('margin', marginDraft, 'Update margin')
                 }
-                className="w-full rounded bg-slate-900 border border-slate-700/80 px-2 py-1 text-xs font-mono-tabular text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/50"
               />
             </div>
           </div>
@@ -2032,13 +2135,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       </div>
 
       {/* Footer Actions */}
-      <div className="p-3 border-t border-slate-800/80 bg-[#0a0f18] shrink-0">
+      <div className="p-3 border-t border-white/[0.08] bg-[#111114] shrink-0">
         <button
           type="button"
           onClick={onRemoveElement}
-          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs font-semibold text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 transition-colors cursor-pointer"
+          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 transition-colors cursor-pointer"
         >
-          <Trash2 className="w-3.5 h-3.5" />
+          <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
           Remove Element
         </button>
       </div>

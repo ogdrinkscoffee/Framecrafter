@@ -5,7 +5,7 @@
 @layer base {
   :root {
     --font-display: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-sans: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   }
 
@@ -15,6 +15,8 @@
     height: 100%;
     overflow: hidden;
     font-family: var(--font-sans);
+    background-color: #09090b;
+    color: #e4e4e7;
   }
 }
 
@@ -27,10 +29,28 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Subtle custom scrollbars for dark builder panels */
+.studio-section-header {
+  font-size: 11px;
+  line-height: 1.25;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #a1a1aa;
+}
+
+.studio-card-highlight {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Custom thin dark scrollbars across all studio panels */
+.builder-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
 .builder-scroll::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 .builder-scroll::-webkit-scrollbar-track {
@@ -38,17 +58,17 @@
 }
 
 .builder-scroll::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22);
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
 }
 
 .builder-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.38);
+  background: rgba(255, 255, 255, 0.26);
 }
 
-/* Subtle dot grid for the canvas stage */
+/* Obsidian dot-grid backdrop for the Live Canvas stage */
 .canvas-grid-bg {
-  background-color: #090d16;
-  background-image: radial-gradient(rgba(148, 163, 184, 0.14) 1px, transparent 1px);
+  background-color: #09090b;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
   background-size: 20px 20px;
 }

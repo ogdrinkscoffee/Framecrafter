@@ -1,21 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { CanvasWorkspace } from './components/CanvasWorkspace';
 import { FileExplorer } from './components/FileExplorer';
 import { RightStudioPanel } from './components/RightStudioPanel';
+import { ShortcutsModal } from './components/ShortcutsModal';
 import { TopToolbar } from './components/TopToolbar';
 import type {
   AutoSaveStatus,
+  CanvasZoomMode,
   CenterTab,
+  DomTreeNode,
   DraggableComponentDef,
   EditorMode,
   HtmlElementPatch,
   ProjectFile,
+  QuickInsertKind,
   ResponsiveScope,
   RightPanelTab,
   SelectedElementInfo,
   SeoMetaValues,
   ViewportPreset,
 } from './types/editor';
+import { findElementSourceLocation, insertQuickComponentInProject } from './utils/codeSync';
 import { DRAGGABLE_COMPONENTS } from './utils/componentCatalog';
 import { deleteRootCssVariable, updateRootCssVariable } from './utils/cssVariables';
 import { exportProjectAsZip, exportSingleFile } from './utils/exportProject';
@@ -45,6 +51,7 @@ import {
   ensureElementNodeAttr,
   ensureStylesheetLinkInHtml,
   insertHtmlSnippet,
+  moveElementSiblingInHtml,
   removeLastTableColumnInHtml,
   removeLastTableRowInHtml,
   replaceTextInHtmlBody,
@@ -54,12 +61,21 @@ import {
   updateTableCellsStyleInHtml,
 } from './utils/htmlSync';
 import { buildIframeBridgeMarkup } from './utils/iframeBridge';
+import { bundleProjectInBrowser } from './utils/browserBundler';
 import {
   buildSrcDoc,
+  type CompiledProjectBundle,
   detectFileType,
+  detectProjectTitleFromUpload,
   findEntryHtmlPath,
+  needsModuleBundling,
   normalizeUploadedFiles,
+  shouldIgnoreUploadPath,
 } from './utils/projectBundler';
+import {
+  applyRuntimeStylePatchToFiles,
+  applyRuntimeTextPatchToFiles,
+} from './utils/reactVisualSync';
 import {
   getNodeDeviceVisibility,
   parseResponsiveCssStore,
@@ -68,6 +84,12 @@ import {
 } from './utils/responsiveCss';
 import { SAMPLE_TEMPLATES } from './utils/sampleTemplates';
 import { updateHeadSeoMeta } from './utils/seoMeta';
+import {
+  classifyViewportPresetFromWidth,
+  isShortcutTypingTarget,
+  matchShortcutAction,
+  type ShortcutAction,
+} from './utils/shortcuts';
 
 const CONTAINER_TAGS = new Set([
   'div',
@@ -121,9 +143,28 @@ export default function App() {
   const [jumpToLine, setJumpToLine] = useState<{
     path: string;
     line: number;
+    endLine?: number;
     token: number;
   } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Split-pane sidebar sizing & collapse
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState(244);
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(392);
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false);
+  const [splitDrag, setSplitDrag] = useState<'left' | 'right' | null>(null);
+
+  // Canvas frame dimensions, zoom, outlines, DOM tree & modal
+  const [canvasWidthPx, setCanvasWidthPx] = useState<number | null>(null);
+  const [canvasHeightPx, setCanvasHeightPx] = useState<number | null>(null);
+  const [canvasZoom, setCanvasZoom] = useState<CanvasZoomMode>('100');
+  const [showOutlines, setShowOutlines] = useState(false);
+  const [domTree, setDomTree] = useState<DomTreeNode[]>([]);
+  const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+  const [activeSpacingOverlay, setActiveSpacingOverlay] = useState<'margin' | 'padding' | null>(
+    null
+  );
 
   const [autoSaveStatus, setAutoSaveStatus] = useState<AutoSaveStatus>({
     enabled: true,
@@ -178,6 +219,8 @@ export default function App() {
   });
 
   const codeDirtyRef = useRef(false);
+  const bundleSeqRef = useRef(0);
+  const selectedOriginalTextRef = useRef('');
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -215,6 +258,34 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [files, projectName, activeTemplateId, autoSaveStatus.enabled, showToast]);
 
+  // Bidirectional vertical split-pane divider pointer dragging
+  useEffect(() => {
+    if (!splitDrag) return;
+    const onPointerMove = (e: PointerEvent) => {
+      if (splitDrag === 'left') {
+        const nextW = Math.max(180, Math.min(480, Math.round(e.clientX)));
+        setLeftSidebarWidth(nextW);
+      } else {
+        const nextW = Math.max(300, Math.min(560, Math.round(window.innerWidth - e.clientX)));
+        setRightSidebarWidth(nextW);
+      }
+    };
+    const onPointerUp = () => {
+      setSplitDrag(null);
+      window.requestAnimationFrame(() => {
+        postToIframe({ type: 'REQUEST_RECT' });
+      });
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+    };
+  }, [splitDrag]);
+
   const rebuildPreview = useCallback(
     (
       nextFiles: ProjectFile[],
@@ -234,12 +305,47 @@ export default function App() {
         setPreviewKey((k) => k + 1);
         return;
       }
+
       const bridge = buildIframeBridgeMarkup(modeOverride, restoreVeId);
-      setRenderedSrcDoc(buildSrcDoc(nextFiles, targetPage, bridge));
-      setPreviewKey((k) => k + 1);
+      const seq = ++bundleSeqRef.current;
+
+      if (!needsModuleBundling(nextFiles, targetPage)) {
+        setRenderedSrcDoc(buildSrcDoc(nextFiles, targetPage, bridge));
+        setPreviewKey((k) => k + 1);
+        return;
+      }
+
+      void (async () => {
+        try {
+          const bundle = await bundleProjectInBrowser(nextFiles, targetPage);
+          if (seq !== bundleSeqRef.current) return;
+          setRenderedSrcDoc(buildSrcDoc(nextFiles, targetPage, bridge, bundle));
+          setPreviewKey((k) => k + 1);
+          if (bundle.error) {
+            showToast('Build error — check preview diagnostic panel');
+          }
+        } catch (err) {
+          if (seq !== bundleSeqRef.current) return;
+          const fallbackBundle: CompiledProjectBundle = {
+            error: err instanceof Error ? err.message : 'Failed to bundle uploaded app',
+          };
+          setRenderedSrcDoc(buildSrcDoc(nextFiles, targetPage, bridge, fallbackBundle));
+          setPreviewKey((k) => k + 1);
+        }
+      })();
     },
-    [editorMode, activePreviewHtmlPath]
+    [editorMode, activePreviewHtmlPath, showToast]
   );
+
+  // If restored workspace from localStorage uses TSX/ESM/Vite, bundle it on initial mount
+  useEffect(() => {
+    const initialEntry = findEntryHtmlPath(startingFiles);
+    if (initialEntry && needsModuleBundling(startingFiles, initialEntry)) {
+      rebuildPreview(startingFiles, initialStartupMode, null, initialEntry);
+    }
+    // Run once on initial mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const postToIframe = useCallback((message: Record<string, unknown>) => {
     const win = iframeRef.current?.contentWindow;
@@ -287,6 +393,7 @@ export default function App() {
 
   const handleChangeViewport = useCallback((nextViewport: ViewportPreset) => {
     setViewport(nextViewport);
+    setCanvasWidthPx(null);
     if (nextViewport === 'mobile') {
       setResponsiveScope('mobile');
     } else if (nextViewport === 'tablet') {
@@ -296,11 +403,83 @@ export default function App() {
     }
   }, []);
 
+  const handleResizeCanvasFrame = useCallback((widthPx: number | null, heightPx: number | null) => {
+    setCanvasWidthPx(widthPx);
+    setCanvasHeightPx(heightPx);
+    if (widthPx !== null) {
+      const matchedPreset = classifyViewportPresetFromWidth(widthPx);
+      setViewport(matchedPreset);
+    }
+  }, []);
+
+  const handleToggleOutlines = useCallback(() => {
+    setShowOutlines((prev) => {
+      const next = !prev;
+      postToIframe({ type: 'SET_OUTLINES', enabled: next });
+      return next;
+    });
+  }, [postToIframe]);
+
+  const handleManualSave = useCallback(async () => {
+    saveWorkspaceToStorage({
+      projectName,
+      activeTemplateId,
+      files,
+      savedAt: Date.now(),
+    });
+    if (diskHandleRef.current) {
+      const res = await writeProjectFilesToDirectory(diskHandleRef.current, files);
+      if (!res.ok) {
+        showToast(res.error || 'Disk save failed');
+        return;
+      }
+      setAutoSaveStatus((prev) => ({ ...prev, lastSavedAt: Date.now() }));
+      showToast(`Saved to ${diskHandleRef.current.name}`);
+      return;
+    }
+    setAutoSaveStatus((prev) => ({ ...prev, lastSavedAt: Date.now() }));
+    showToast('Saved');
+  }, [projectName, activeTemplateId, files, showToast]);
+
+  const executeShortcutActionRef = useRef<(action: ShortcutAction) => void>(() => {});
+
   // Listen for messages from sandboxed iframe bridge
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const data = event.data;
       if (!data || data.source !== 've-iframe') return;
+
+      if (data.type === 'IFRAME_KEYDOWN') {
+        const action = matchShortcutAction(
+          {
+            key: String(data.key || ''),
+            ctrlKey: Boolean(data.ctrlKey),
+            metaKey: Boolean(data.metaKey),
+            shiftKey: Boolean(data.shiftKey),
+            altKey: Boolean(data.altKey),
+          },
+          {
+            editorMode,
+            hasSelectedElement: Boolean(selectedElement),
+            hasOpenModal: shortcutsModalOpen,
+            isTyping: false,
+          }
+        );
+        if (action) {
+          executeShortcutActionRef.current(action);
+        }
+        return;
+      }
+
+      if (data.type === 'DOM_TREE_UPDATE' && Array.isArray(data.nodes)) {
+        setDomTree(data.nodes as DomTreeNode[]);
+        return;
+      }
+
+      if (data.type === 'DOM_MOUNTED') {
+        postToIframe({ type: 'SET_OUTLINES', enabled: showOutlines });
+        return;
+      }
 
       if (data.type === 'NAVIGATE_PAGE' && typeof data.page === 'string') {
         handleSwitchPreviewPage(data.page);
@@ -309,28 +488,41 @@ export default function App() {
 
       if (data.type === 'ELEMENT_SELECTED' && data.element) {
         const nextEl = data.element as SelectedElementInfo;
+        selectedOriginalTextRef.current = nextEl.textContent || '';
         setSelectedElement(nextEl);
         setRightPanelTab('inspector');
 
-        if (copiedFormat && nextEl.veId && entryHtmlPath) {
+        if (copiedFormat) {
           const previewPatch: Record<string, string> = {};
           for (const [k, v] of Object.entries(copiedFormat)) {
             if (v) previewPatch[k] = v;
           }
           postToIframe({ type: 'PREVIEW_STYLE', styles: previewPatch });
-          setHistory((prevHistory) => {
-            const nextFiles = prevHistory.present.files.map((file) =>
-              file.path === entryHtmlPath
-                ? {
-                    ...file,
-                    content: applyElementPatchToHtml(file.content, nextEl.veId!, {
-                      styles: copiedFormat,
-                    }),
-                  }
-                : file
-            );
-            return pushHistoryState(prevHistory, nextFiles, 'Apply Format Painter');
-          });
+          if (nextEl.veId && entryHtmlPath) {
+            setHistory((prevHistory) => {
+              const nextFiles = prevHistory.present.files.map((file) =>
+                file.path === entryHtmlPath
+                  ? {
+                      ...file,
+                      content: applyElementPatchToHtml(file.content, nextEl.veId!, {
+                        styles: copiedFormat,
+                      }),
+                    }
+                  : file
+              );
+              return pushHistoryState(prevHistory, nextFiles, 'Apply Format Painter');
+            });
+          } else if (nextEl.uniqueSelector || nextEl.selectorPath) {
+            const sel = nextEl.uniqueSelector || nextEl.selectorPath;
+            setHistory((prevHistory) => {
+              const nextFiles = applyRuntimeStylePatchToFiles(
+                prevHistory.present.files,
+                sel,
+                copiedFormat
+              );
+              return pushHistoryState(prevHistory, nextFiles, 'Apply Format Painter');
+            });
+          }
           setCopiedFormat(null);
           showToast('Applied copied formatting');
         }
@@ -338,6 +530,7 @@ export default function App() {
       }
 
       if (data.type === 'ELEMENT_CLEARED') {
+        selectedOriginalTextRef.current = '';
         setSelectedElement(null);
         return;
       }
@@ -381,12 +574,27 @@ export default function App() {
             );
             return pushHistoryState(prevHistory, nextFiles, 'Move element');
           });
+        } else if (updatedEl?.uniqueSelector || updatedEl?.selectorPath) {
+          const sel = updatedEl.uniqueSelector || updatedEl.selectorPath;
+          setHistory((prevHistory) => {
+            const nextFiles = applyRuntimeStylePatchToFiles(
+              prevHistory.present.files,
+              sel,
+              data.styles
+            );
+            return pushHistoryState(prevHistory, nextFiles, 'Move element');
+          });
         }
         return;
       }
 
       if (data.type === 'TEXT_COMMITTED') {
         const updatedEl = data.element as SelectedElementInfo;
+        const prevText =
+          typeof data.previousText === 'string'
+            ? data.previousText
+            : selectedOriginalTextRef.current;
+        selectedOriginalTextRef.current = data.textContent || '';
         setSelectedElement(updatedEl);
         if (data.veId && entryHtmlPath) {
           setHistory((prevHistory) => {
@@ -402,17 +610,61 @@ export default function App() {
             );
             return pushHistoryState(prevHistory, nextFiles, 'Edit element text');
           });
+        } else if (updatedEl) {
+          const sel = updatedEl.uniqueSelector || updatedEl.selectorPath;
+          setHistory((prevHistory) => {
+            const nextFiles = applyRuntimeTextPatchToFiles(prevHistory.present.files, {
+              selector: sel,
+              tagName: updatedEl.tagName,
+              previousText: prevText,
+              nextText: data.textContent,
+            });
+            return pushHistoryState(prevHistory, nextFiles, 'Edit element text');
+          });
         }
       }
     };
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [entryHtmlPath, handleSwitchPreviewPage, copiedFormat, postToIframe, showToast]);
+  }, [
+    entryHtmlPath,
+    handleSwitchPreviewPage,
+    copiedFormat,
+    postToIframe,
+    showToast,
+    editorMode,
+    selectedElement,
+    shortcutsModalOpen,
+    showOutlines,
+  ]);
 
   const applyPatchAndSync = useCallback(
     (patch: HtmlElementPatch, label: string, shouldRebuildAfter = false) => {
-      if (!selectedElement?.veId || !entryHtmlPath) {
+      if (!selectedElement) return;
+
+      if (!selectedElement.veId || !entryHtmlPath) {
+        const sel = selectedElement.uniqueSelector || selectedElement.selectorPath;
+        setHistory((prevHistory) => {
+          let nextFiles = prevHistory.present.files;
+          if (patch.styles && sel) {
+            nextFiles = applyRuntimeStylePatchToFiles(nextFiles, sel, patch.styles);
+          }
+          if (patch.textContent !== undefined) {
+            const prevText = selectedOriginalTextRef.current || selectedElement.textContent;
+            nextFiles = applyRuntimeTextPatchToFiles(nextFiles, {
+              selector: sel,
+              tagName: selectedElement.tagName,
+              previousText: prevText,
+              nextText: patch.textContent,
+            });
+            selectedOriginalTextRef.current = patch.textContent;
+          }
+          if (patch.remove && sel) {
+            nextFiles = applyRuntimeStylePatchToFiles(nextFiles, sel, { display: 'none' });
+          }
+          return pushHistoryState(prevHistory, nextFiles, label);
+        });
         if (shouldRebuildAfter) {
           postToIframe({ type: 'REMOVE_SELECTED' });
           setSelectedElement(null);
@@ -812,9 +1064,19 @@ export default function App() {
       rebuildPreview(nextFiles, editorMode, null, entryHtmlPath);
       showToast('Element removed');
     } else {
+      const sel = selectedElement.uniqueSelector || selectedElement.selectorPath;
+      if (sel) {
+        setHistory((prev) =>
+          pushHistoryState(
+            prev,
+            applyRuntimeStylePatchToFiles(prev.present.files, sel, { display: 'none' }),
+            'Remove element'
+          )
+        );
+      }
       postToIframe({ type: 'REMOVE_SELECTED' });
       setSelectedElement(null);
-      showToast('Runtime element removed');
+      showToast('Element removed');
     }
   }, [selectedElement, entryHtmlPath, files, editorMode, rebuildPreview, postToIframe, showToast]);
 
@@ -1045,6 +1307,83 @@ export default function App() {
     }
   }, [files, showToast]);
 
+  const handleSelectParent = useCallback(() => {
+    if (!selectedElement) return;
+    postToIframe({ type: 'SELECT_PARENT' });
+  }, [selectedElement, postToIframe]);
+
+  const handleMoveElementSibling = useCallback(
+    (direction: 'up' | 'down') => {
+      if (!selectedElement) return;
+      if (selectedElement.veId && entryHtmlPath && activeHtmlFile) {
+        const res = moveElementSiblingInHtml(
+          activeHtmlFile.content,
+          selectedElement.veId,
+          direction
+        );
+        if (!res.moved) {
+          showToast(
+            direction === 'up' ? 'Already first among siblings' : 'Already last among siblings'
+          );
+          return;
+        }
+        const nextFiles = files.map((f) =>
+          f.path === entryHtmlPath ? { ...f, content: res.html } : f
+        );
+        setHistory((prev) =>
+          pushHistoryState(prev, nextFiles, direction === 'up' ? 'Move element up' : 'Move element down')
+        );
+        rebuildPreview(nextFiles, editorMode, res.nextVeId ?? selectedElement.veId, entryHtmlPath);
+        showToast(direction === 'up' ? 'Moved element up' : 'Moved element down');
+        return;
+      }
+      postToIframe({ type: 'MOVE_SIBLING', direction });
+      showToast(direction === 'up' ? 'Moved element up' : 'Moved element down');
+    },
+    [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview, postToIframe, showToast]
+  );
+
+  const handleViewSelectedInCode = useCallback(() => {
+    if (!selectedElement) return;
+    const match = findElementSourceLocation(files, entryHtmlPath, selectedElement);
+    if (match) {
+      setActiveFilePath(match.path);
+      setCenterTab('code');
+      setJumpToLine({
+        path: match.path,
+        line: match.line,
+        endLine: match.endLine,
+        token: Date.now(),
+      });
+      showToast(`Viewing <${selectedElement.tagName}> in ${match.path}:${match.line}`);
+      return;
+    }
+    const fallbackPath = entryHtmlPath || activeFilePath || files[0]?.path || null;
+    if (fallbackPath) {
+      setActiveFilePath(fallbackPath);
+      setCenterTab('code');
+      showToast(`Opened ${fallbackPath}`);
+    }
+  }, [selectedElement, files, entryHtmlPath, activeFilePath, showToast]);
+
+  const handleQuickInsertKind = useCallback(
+    (kind: QuickInsertKind) => {
+      const result = insertQuickComponentInProject(files, entryHtmlPath, kind, selectedElement);
+      if (!result.targetPath) {
+        showToast('No editable target file found');
+        return;
+      }
+      setHistory((prev) => pushHistoryState(prev, result.files, `Insert ${kind}`));
+      setCenterTab('preview');
+      if (editorMode !== 'edit') {
+        setEditorMode('edit');
+      }
+      rebuildPreview(result.files, 'edit', result.insertedVeId, entryHtmlPath);
+      showToast(`Inserted ${kind} into ${result.targetPath}`);
+    },
+    [files, entryHtmlPath, selectedElement, editorMode, rebuildPreview, showToast]
+  );
+
   // Undo & Redo
   const handleUndo = useCallback(() => {
     if (history.past.length === 0) return;
@@ -1066,58 +1405,109 @@ export default function App() {
     showToast(`Redid: ${nextState.present.label}`);
   }, [history, selectedElement, editorMode, rebuildPreview, showToast]);
 
+  const executeShortcutAction = useCallback(
+    (action: ShortcutAction) => {
+      switch (action) {
+        case 'undo':
+          handleUndo();
+          break;
+        case 'redo':
+          handleRedo();
+          break;
+        case 'save':
+          void handleManualSave();
+          break;
+        case 'toggle-mode':
+          handleChangeMode(editorMode === 'edit' ? 'interact' : 'edit');
+          break;
+        case 'toggle-left-sidebar':
+          setLeftSidebarCollapsed((prev) => !prev);
+          window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+          break;
+        case 'toggle-right-sidebar':
+          setRightSidebarCollapsed((prev) => !prev);
+          window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+          break;
+        case 'duplicate':
+          if (editorMode === 'edit' && selectedElement) handleDuplicateElement();
+          break;
+        case 'delete':
+          if (editorMode === 'edit' && selectedElement) handleRemoveElement();
+          break;
+        case 'move-up':
+          if (editorMode === 'edit' && selectedElement) handleMoveElementSibling('up');
+          break;
+        case 'move-down':
+          if (editorMode === 'edit' && selectedElement) handleMoveElementSibling('down');
+          break;
+        case 'viewport-desktop':
+          handleChangeViewport('desktop');
+          break;
+        case 'viewport-tablet':
+          handleChangeViewport('tablet');
+          break;
+        case 'viewport-mobile':
+          handleChangeViewport('mobile');
+          break;
+        case 'open-shortcuts':
+          setShortcutsModalOpen((prev) => !prev);
+          break;
+        case 'escape':
+          if (shortcutsModalOpen) {
+            setShortcutsModalOpen(false);
+          } else if (selectedElement) {
+            setCopiedFormat(null);
+            postToIframe({ type: 'SELECT_VE_ID', veId: null });
+            setSelectedElement(null);
+          }
+          break;
+      }
+    },
+    [
+      handleUndo,
+      handleRedo,
+      handleManualSave,
+      handleChangeMode,
+      editorMode,
+      selectedElement,
+      handleDuplicateElement,
+      handleRemoveElement,
+      handleMoveElementSibling,
+      handleChangeViewport,
+      shortcutsModalOpen,
+      postToIframe,
+    ]
+  );
+
+  executeShortcutActionRef.current = executeShortcutAction;
+
   // Global keyboard shortcuts
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const isTyping =
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.isContentEditable);
-
-      if ((e.ctrlKey || e.metaKey) && !isTyping) {
-        if (e.key.toLowerCase() === 'z' && !e.shiftKey) {
-          e.preventDefault();
-          handleUndo();
-          return;
+      const action = matchShortcutAction(
+        {
+          key: e.key,
+          code: e.code,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+        },
+        {
+          editorMode,
+          hasSelectedElement: Boolean(selectedElement),
+          hasOpenModal: shortcutsModalOpen,
+          isTyping: isShortcutTypingTarget(e.target),
         }
-        if (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey)) {
-          e.preventDefault();
-          handleRedo();
-          return;
-        }
-        if (e.key.toLowerCase() === 'd' && editorMode === 'edit' && selectedElement) {
-          e.preventDefault();
-          handleDuplicateElement();
-          return;
-        }
-      }
-
-      if (!isTyping && editorMode === 'edit' && selectedElement) {
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-          e.preventDefault();
-          handleRemoveElement();
-        } else if (e.key === 'Escape') {
-          setCopiedFormat(null);
-          postToIframe({ type: 'SELECT_VE_ID', veId: null });
-          setSelectedElement(null);
-        }
-      }
+      );
+      if (!action) return;
+      e.preventDefault();
+      executeShortcutAction(action);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [
-    handleUndo,
-    handleRedo,
-    handleDuplicateElement,
-    handleRemoveElement,
-    editorMode,
-    selectedElement,
-    postToIframe,
-  ]);
+  }, [editorMode, selectedElement, shortcutsModalOpen, executeShortcutAction]);
 
   const handleLoadTemplate = useCallback(
     (templateId: string) => {
@@ -1154,45 +1544,64 @@ export default function App() {
 
   const handleUploadFiles = useCallback(
     async (fileList: FileList) => {
-      const textExtensions = new Set([
-        'html',
-        'htm',
-        'css',
-        'js',
-        'mjs',
-        'ts',
-        'tsx',
-        'jsx',
-        'json',
-        'svg',
-        'txt',
-        'md',
+      const binaryExtensions = new Set([
+        'png',
+        'jpg',
+        'jpeg',
+        'gif',
+        'webp',
+        'avif',
+        'ico',
+        'woff',
+        'woff2',
+        'ttf',
+        'eot',
+        'otf',
+        'apk',
+        'aab',
+        'jar',
+        'keystore',
+        'jks',
+        'mp4',
+        'webm',
+        'mp3',
+        'wav',
+        'pdf',
+        'zip',
       ]);
 
+      const readAsDataUrl = (file: File): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+          reader.onerror = () => reject(reader.error || new Error('Failed to read binary file'));
+          reader.readAsDataURL(file);
+        });
+
       const rawEntries: Array<{ path: string; name: string; content: string }> = [];
-      let folderTitle: string | null = null;
 
       for (const file of Array.from(fileList)) {
-        const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-        if (!textExtensions.has(ext)) continue;
         const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-        if (!folderTitle && rel.includes('/')) {
-          folderTitle = rel.split('/')[0];
-        }
-        const content = await file.text();
+        if (shouldIgnoreUploadPath(rel)) continue;
+        const lowerName = file.name.toLowerCase();
+        const ext = lowerName.includes('.') ? lowerName.split('.').pop() ?? '' : '';
+        const content = binaryExtensions.has(ext)
+          ? await readAsDataUrl(file)
+          : await file.text();
         rawEntries.push({ path: rel, name: file.name, content });
       }
 
       if (rawEntries.length === 0) {
-        showToast('No supported web files found (.html, .css, .js, .json)');
+        showToast('No supported files found in selection');
         return;
       }
 
       const normalized = normalizeUploadedFiles(rawEntries);
       const nextEntry = findEntryHtmlPath(normalized);
+      const detectedTitle = detectProjectTitleFromUpload(rawEntries, normalized);
       setInitialFiles(cloneProjectFiles(normalized));
       setHistory(createHistoryState(normalized, 'Loaded custom project'));
-      setProjectName(folderTitle || 'Custom Project');
+      setProjectName(detectedTitle || 'Custom Project');
       setActiveTemplateId(null);
       setActiveFilePath(nextEntry ?? normalized[0]?.path ?? null);
       setActivePreviewHtmlPath(nextEntry);
@@ -1200,7 +1609,13 @@ export default function App() {
       setCenterTab('preview');
       codeDirtyRef.current = false;
       rebuildPreview(normalized, editorMode, null, nextEntry);
-      showToast(`Loaded ${normalized.length} project files`);
+      if (!nextEntry) {
+        showToast(`Loaded ${normalized.length} files (no HTML entry found)`);
+      } else if (needsModuleBundling(normalized, nextEntry)) {
+        showToast(`Loaded & running ${normalized.length} files (${nextEntry})`);
+      } else {
+        showToast(`Loaded ${normalized.length} files (${nextEntry})`);
+      }
     },
     [editorMode, rebuildPreview, showToast]
   );
@@ -1269,7 +1684,7 @@ export default function App() {
   );
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#090d16] text-slate-100">
+    <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#09090b] text-[#e4e4e7]">
       <TopToolbar
         projectName={projectName}
         editorMode={editorMode}
@@ -1280,41 +1695,87 @@ export default function App() {
         canRedo={history.future.length > 0}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        onSaveProject={() => void handleManualSave()}
         onResetProject={handleResetProject}
         onExportZip={handleExportZip}
         onUploadFiles={handleUploadFiles}
         autoSaveStatus={autoSaveStatus}
         onConnectDiskFolder={handleConnectDiskFolder}
+        onOpenShortcuts={() => setShortcutsModalOpen(true)}
       />
 
-      <div className="flex-1 min-h-0 flex">
-        <FileExplorer
-          files={files}
-          activeFilePath={activeFilePath}
-          entryHtmlPath={entryHtmlPath}
-          templates={SAMPLE_TEMPLATES}
-          activeTemplateId={activeTemplateId}
-          onSelectFile={(path) => {
-            setActiveFilePath(path);
-            const targetFile = files.find((f) => f.path === path);
-            if (targetFile?.type === 'html' && centerTab === 'preview') {
-              handleSwitchPreviewPage(path);
-            }
-          }}
-          onOpenCodeEditor={(path, lineNumber) => {
-            setActiveFilePath(path);
-            setCenterTab('code');
-            if (lineNumber) {
-              setJumpToLine({ path, line: lineNumber, token: Date.now() });
-            }
-          }}
-          onDownloadFile={(file) => {
-            exportSingleFile(file);
-            showToast(`Downloaded ${file.name}`);
-          }}
-          onCreateFile={handleCreateFile}
-          onLoadTemplate={handleLoadTemplate}
-        />
+      <div className="flex-1 min-h-0 flex relative">
+        {/* Transparent drag shield over iframe while resizing split panes */}
+        {splitDrag && <div className="fixed inset-0 z-40 cursor-col-resize select-none" />}
+
+        {leftSidebarCollapsed ? (
+          <div className="w-9 shrink-0 border-r border-white/[0.08] bg-[#111114] flex flex-col items-center py-2.5">
+            <button
+              type="button"
+              onClick={() => {
+                setLeftSidebarCollapsed(false);
+                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+              }}
+              aria-label="Expand Project Files sidebar"
+              title="Expand Project Files (Ctrl+B)"
+              className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] transition-colors cursor-pointer"
+            >
+              <PanelLeftOpen className="w-4 h-4" strokeWidth={1.5} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <FileExplorer
+              widthPx={leftSidebarWidth}
+              onCollapse={() => {
+                setLeftSidebarCollapsed(true);
+                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+              }}
+              files={files}
+              activeFilePath={activeFilePath}
+              entryHtmlPath={entryHtmlPath}
+              templates={SAMPLE_TEMPLATES}
+              activeTemplateId={activeTemplateId}
+              onSelectFile={(path) => {
+                setActiveFilePath(path);
+                const targetFile = files.find((f) => f.path === path);
+                if (targetFile?.type === 'html' && centerTab === 'preview') {
+                  handleSwitchPreviewPage(path);
+                }
+              }}
+              onOpenCodeEditor={(path, lineNumber) => {
+                setActiveFilePath(path);
+                setCenterTab('code');
+                if (lineNumber) {
+                  setJumpToLine({ path, line: lineNumber, token: Date.now() });
+                }
+              }}
+              onDownloadFile={(file) => {
+                exportSingleFile(file);
+                showToast(`Downloaded ${file.name}`);
+              }}
+              onCreateFile={handleCreateFile}
+              onLoadTemplate={handleLoadTemplate}
+            />
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize Project Files panel"
+              data-testid="left-split-divider"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                setSplitDrag('left');
+              }}
+              onDoubleClick={() => {
+                setLeftSidebarWidth(256);
+                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+              }}
+              style={{ cursor: 'col-resize' }}
+              title="Drag to resize · Double-click to reset"
+              className="w-1 shrink-0 bg-transparent hover:bg-indigo-500/70 transition-colors z-50"
+            />
+          </>
+        )}
 
         <CanvasWorkspace
           centerTab={centerTab}
@@ -1327,6 +1788,14 @@ export default function App() {
             setAutoSaveStatus((prev) => ({ ...prev, enabled: !prev.enabled }))
           }
           viewport={viewport}
+          canvasWidthPx={canvasWidthPx}
+          canvasHeightPx={canvasHeightPx}
+          onResizeCanvasFrame={handleResizeCanvasFrame}
+          canvasZoom={canvasZoom}
+          onChangeCanvasZoom={setCanvasZoom}
+          showOutlines={showOutlines}
+          onToggleOutlines={handleToggleOutlines}
+          activeSpacingOverlay={activeSpacingOverlay}
           srcDoc={renderedSrcDoc}
           previewKey={previewKey}
           entryHtmlPath={entryHtmlPath}
@@ -1347,70 +1816,133 @@ export default function App() {
           onCommitResizeStyle={handleCommitFormattingStyle}
           onCommitFormattingStyle={handleCommitFormattingStyle}
           onQuickInsertById={handleQuickInsertById}
+          onQuickInsertKind={handleQuickInsertKind}
           onInsertCustomHtml={handleInsertCustomHtml}
           onInsertSymbol={handleInsertSymbol}
           onFindAndReplace={handleFindAndReplace}
           onDuplicateSelected={handleDuplicateElement}
+          onSelectParent={handleSelectParent}
+          onMoveSibling={handleMoveElementSibling}
+          onRemoveSelected={handleRemoveElement}
+          onViewSelectedInCode={handleViewSelectedInCode}
           onUpdateCodeContent={handleUpdateCodeContent}
           onPostIframeMessage={postToIframe}
           onDropComponentOnCanvas={handleDropComponentOnCanvas}
         />
 
-        <RightStudioPanel
-          activeTab={rightPanelTab}
-          onChangeTab={setRightPanelTab}
-          selectedElement={selectedElement}
-          aspectRatioLocked={selectedAspectRatioLocked}
-          onToggleAspectRatioLock={handleToggleAspectRatioLock}
-          responsiveScope={responsiveScope}
-          onChangeResponsiveScope={setResponsiveScope}
-          activeHtmlPath={entryHtmlPath}
-          activeHtmlContent={activeHtmlFile?.content ?? ''}
-          htmlPages={htmlPages}
-          primaryCssPath={primaryCssFile?.path ?? null}
-          stylesCssContent={primaryCssFile?.content ?? ''}
-          onPreviewStyle={handlePreviewStyle}
-          onCommitStyle={handleCommitStyle}
-          onCommitResponsiveStyle={handleCommitResponsiveStyle}
-          onToggleDeviceVisibility={handleToggleDeviceVisibility}
-          onPreviewText={handlePreviewText}
-          onCommitText={handleCommitText}
-          onCommitAttributes={handleCommitAttributes}
-          onPreviewSvgShape={handlePreviewSvgShape}
-          onCommitSvgShape={handleCommitSvgShape}
-          onCreatePageAndLink={handleCreatePageAndLink}
-          onAddTableRow={handleAddTableRow}
-          onRemoveTableRow={handleRemoveTableRow}
-          onAddTableColumn={handleAddTableColumn}
-          onRemoveTableColumn={handleRemoveTableColumn}
-          onUpdateTableCellStyles={handleUpdateTableCellStyles}
-          onToggleTableStriped={handleToggleTableStriped}
-          onDuplicateElement={handleDuplicateElement}
-          onRemoveElement={handleRemoveElement}
-          onToggleVisibility={handleToggleVisibility}
-          onDragStartComponent={(component) => {
-            setDraggingComponent(component);
-            if (centerTab !== 'preview') {
-              setCenterTab('preview');
-            }
-          }}
-          onDragEndComponent={() => {
-            setDraggingComponent(null);
-            postToIframe({ type: 'CLEAR_DROP_TARGET' });
-          }}
-          onInsertComponent={handleInsertComponentButton}
-          onCommitSeoMeta={handleCommitSeoMeta}
-          onPreviewRootVar={handlePreviewRootVar}
-          onCommitRootVar={handleCommitRootVar}
-          onDeleteRootVar={handleDeleteRootVar}
-        />
+        {rightSidebarCollapsed ? (
+          <div className="w-9 shrink-0 border-l border-white/[0.08] bg-[#111114] flex flex-col items-center py-2.5">
+            <button
+              type="button"
+              onClick={() => {
+                setRightSidebarCollapsed(false);
+                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+              }}
+              aria-label="Expand Inspector sidebar"
+              title="Expand Inspector (Ctrl+I)"
+              className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] transition-colors cursor-pointer"
+            >
+              <PanelRightOpen className="w-4 h-4" strokeWidth={1.5} />
+            </button>
+          </div>
+        ) : (
+          <>
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize Inspector panel"
+              data-testid="right-split-divider"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                setSplitDrag('right');
+              }}
+              onDoubleClick={() => {
+                setRightSidebarWidth(380);
+                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+              }}
+              style={{ cursor: 'col-resize' }}
+              title="Drag to resize · Double-click to reset"
+              className="w-1 shrink-0 bg-transparent hover:bg-indigo-500/70 transition-colors z-50"
+            />
+            <RightStudioPanel
+              widthPx={rightSidebarWidth}
+              onCollapse={() => {
+                setRightSidebarCollapsed(true);
+                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+              }}
+              activeTab={rightPanelTab}
+              onChangeTab={setRightPanelTab}
+              selectedElement={selectedElement}
+              domTree={domTree}
+              onSelectDomNode={(nodeId) => {
+                if (editorMode !== 'edit') {
+                  handleChangeMode('edit');
+                }
+                if (centerTab !== 'preview') {
+                  setCenterTab('preview');
+                }
+                postToIframe({ type: 'SELECT_NODE_ID', nodeId });
+              }}
+              onHoverDomNode={(nodeId) => {
+                postToIframe({ type: 'HOVER_NODE_ID', nodeId });
+              }}
+              onViewInCode={handleViewSelectedInCode}
+              onHoverSpacing={setActiveSpacingOverlay}
+              aspectRatioLocked={selectedAspectRatioLocked}
+              onToggleAspectRatioLock={handleToggleAspectRatioLock}
+              responsiveScope={responsiveScope}
+              onChangeResponsiveScope={setResponsiveScope}
+              activeHtmlPath={entryHtmlPath}
+              activeHtmlContent={activeHtmlFile?.content ?? ''}
+              htmlPages={htmlPages}
+              primaryCssPath={primaryCssFile?.path ?? null}
+              stylesCssContent={primaryCssFile?.content ?? ''}
+              onPreviewStyle={handlePreviewStyle}
+              onCommitStyle={handleCommitStyle}
+              onCommitResponsiveStyle={handleCommitResponsiveStyle}
+              onToggleDeviceVisibility={handleToggleDeviceVisibility}
+              onPreviewText={handlePreviewText}
+              onCommitText={handleCommitText}
+              onCommitAttributes={handleCommitAttributes}
+              onPreviewSvgShape={handlePreviewSvgShape}
+              onCommitSvgShape={handleCommitSvgShape}
+              onCreatePageAndLink={handleCreatePageAndLink}
+              onAddTableRow={handleAddTableRow}
+              onRemoveTableRow={handleRemoveTableRow}
+              onAddTableColumn={handleAddTableColumn}
+              onRemoveTableColumn={handleRemoveTableColumn}
+              onUpdateTableCellStyles={handleUpdateTableCellStyles}
+              onToggleTableStriped={handleToggleTableStriped}
+              onDuplicateElement={handleDuplicateElement}
+              onRemoveElement={handleRemoveElement}
+              onToggleVisibility={handleToggleVisibility}
+              onDragStartComponent={(component) => {
+                setDraggingComponent(component);
+                if (centerTab !== 'preview') {
+                  setCenterTab('preview');
+                }
+              }}
+              onDragEndComponent={() => {
+                setDraggingComponent(null);
+                postToIframe({ type: 'CLEAR_DROP_TARGET' });
+              }}
+              onInsertComponent={handleInsertComponentButton}
+              onCommitSeoMeta={handleCommitSeoMeta}
+              onPreviewRootVar={handlePreviewRootVar}
+              onCommitRootVar={handleCommitRootVar}
+              onDeleteRootVar={handleDeleteRootVar}
+            />
+          </>
+        )}
       </div>
+
+      <ShortcutsModal open={shortcutsModalOpen} onClose={() => setShortcutsModalOpen(false)} />
 
       {toastMessage && (
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-xs font-medium text-slate-100 shadow-xl pointer-events-none"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3.5 py-2 rounded-xl bg-[#18181b] border border-white/[0.1] studio-card-highlight text-[12px] font-medium text-zinc-100 shadow-2xl shadow-black/70 pointer-events-none"
         >
           {toastMessage}
         </div>
