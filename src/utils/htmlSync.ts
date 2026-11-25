@@ -338,7 +338,7 @@ function updateOpeningTagAttributes(
 
     const encodedAttr = ` ${key}="${escapeAttrValue(rawVal)}"`;
     if (attrRegex.test(result)) {
-      result = result.replace(attrRegex, encodedAttr);
+      result = result.replace(attrRegex, () => encodedAttr);
     } else {
       const insertAt = result.endsWith('/>') ? result.length - 2 : result.length - 1;
       result = result.slice(0, insertAt) + encodedAttr + result.slice(insertAt);
@@ -489,7 +489,7 @@ export function ensureStylesheetLinkInHtml(html: string, cssPath: string): strin
 
   const linkTag = `    <link rel="stylesheet" href="${cssPath}" />`;
   if (/<\/head>/i.test(html)) {
-    return html.replace(/<\/head>/i, `${linkTag}\n  </head>`);
+    return html.replace(/<\/head>/i, () => `${linkTag}\n  </head>`);
   }
   return `${linkTag}\n${html}`;
 }

@@ -18,6 +18,48 @@ export interface GitHubConnectionConfig {
   lastCommitUrl?: string;
 }
 
+export interface GitHubUserProfile {
+  login: string;
+  name: string | null;
+  avatarUrl: string | null;
+  htmlUrl: string;
+}
+
+export interface GitHubRepoSummary {
+  id: number;
+  name: string;
+  fullName: string;
+  owner: string;
+  private: boolean;
+  defaultBranch: string;
+  description: string | null;
+  htmlUrl: string;
+  updatedAt: string;
+  language: string | null;
+  canPush: boolean;
+}
+
+export interface GitHubAuthStatusResponse {
+  configured: boolean;
+  callbackUrl: string;
+  connected: boolean;
+  user?: GitHubUserProfile;
+}
+
+export interface GitHubReposResponse {
+  ok: boolean;
+  user?: GitHubUserProfile;
+  repos?: GitHubRepoSummary[];
+  requiresAuth?: boolean;
+  error?: string;
+}
+
+export interface GitHubBranchesResponse {
+  ok: boolean;
+  branches?: string[];
+  error?: string;
+}
+
 export interface GitHubPullResponse {
   ok: boolean;
   repoFullName?: string;
@@ -40,7 +82,7 @@ export interface GitHubPushResponse {
   error?: string;
 }
 
-const VALID_GITHUB_SLUG_RE = /^[A-Za-z0-9_.-]+$/;
+export const VALID_GITHUB_SLUG_RE = /^[A-Za-z0-9_.-]+$/;
 
 const BINARY_MIME_BY_EXT: Record<string, string> = {
   png: 'image/png',

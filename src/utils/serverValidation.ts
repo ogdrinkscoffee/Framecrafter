@@ -219,3 +219,63 @@ export function createSlidingWindowRateLimiter(options: {
     },
   };
 }
+
+export function validateGithubOAuthExchangePayload(raw: unknown): ValidationResult<{
+  code: string;
+  codeVerifier: string;
+  exchangeToken?: string;
+  state?: string;
+  redirectUri?: string;
+}> {
+  if (!isPlainObject(raw)) {
+    return { ok: false, error: 'Invalid request body.' };
+  }
+  const code = typeof raw.code === 'string' ? raw.code.trim() : '';
+  if (!code || code.length > 256) {
+    return { ok: false, error: 'Missing or invalid GitHub authorization code.' };
+  }
+  const codeVerifier = typeof raw.codeVerifier === 'string' ? raw.codeVerifier.trim() : '';
+  if (!/^[A-Za-z0-9\-._~]{43,128}$/.test(codeVerifier)) {
+    return { ok: false, error: 'Invalid PKCE code_verifier format.' };
+  }
+  const exchangeToken =
+    typeof raw.exchangeToken === 'string' && raw.exchangeToken.trim()
+      ? raw.exchangeToken.trim()
+      : undefined;
+  const state =
+    typeof raw.state === 'string' && raw.state.trim() ? raw.state.trim() : undefined;
+
+  if (!exchangeToken && !state) {
+    return {
+      ok: false,
+      error: 'Missing OAuth verification token (exchangeToken or state) for PKCE exchange.',
+    };
+  }
+
+  let redirectUri: string | undefined;
+  if (raw.redirectUri !== undefined && raw.redirectUri !== null && raw.redirectUri !== '') {
+    if (typeof raw.redirectUri !== 'string' || raw.redirectUri.length > MAX_REPO_URL_LEN) {
+      return { ok: false, error: 'Invalid redirectUri parameter.' };
+    }
+    try {
+      const parsed = new URL(raw.redirectUri.trim());
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        return { ok: false, error: 'Invalid redirectUri protocol.' };
+      }
+      redirectUri = parsed.toString();
+    } catch {
+      return { ok: false, error: 'Malformed redirectUri URL.' };
+    }
+  }
+
+  return {
+    ok: true,
+    data: {
+      code,
+      codeVerifier,
+      exchangeToken,
+      state,
+      redirectUri,
+    },
+  };
+}

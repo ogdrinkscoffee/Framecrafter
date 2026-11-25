@@ -1036,7 +1036,7 @@ function buildBlobModuleLoaderMarkup(compiledJs: string): string {
   function collectImportedSpecs(code) {
     var specs = [];
     var seen = Object.create(null);
-    var re = /(?:^|[;\\n])\\s*(?:import|export)\\s+(?:[\\s\\S]*?\\s+from\\s+)?['"]([^'"]+)['"]/g;
+    var re = /(?:^|[;\\n])\\s*(?:import|export)\\s+(?:[^;'"\\n]*?\\s+from\\s+)?['"]([^'"]+)['"]/g;
     var m;
     while ((m = re.exec(code)) !== null) {
       if (m[1] && !seen[m[1]]) {
@@ -1047,7 +1047,20 @@ function buildBlobModuleLoaderMarkup(compiledJs: string): string {
     return specs;
   }
 
-  function diagnoseFailureAndReport(jsCode) {
+  function tryImportDiagnostic(failedBlobUrl, fallbackMessage) {
+    try {
+      import(failedBlobUrl).catch(function(impErr) {
+        var detail = impErr && (impErr.stack || impErr.message) ? (impErr.stack || impErr.message) : fallbackMessage;
+        window.dispatchEvent(new ErrorEvent('error', { message: detail }));
+      });
+    } catch (syncErr) {
+      window.dispatchEvent(new ErrorEvent('error', {
+        message: (syncErr && syncErr.message) ? syncErr.message : fallbackMessage
+      }));
+    }
+  }
+
+  function diagnoseFailureAndReport(jsCode, failedBlobUrl) {
     var mapEl = document.querySelector('script[type="importmap"]');
     var importMap = {};
     if (mapEl && mapEl.textContent) {
@@ -1096,9 +1109,7 @@ function buildBlobModuleLoaderMarkup(compiledJs: string): string {
       inlineEl.setAttribute('data-ve-fallback', 'inline');
       inlineEl.textContent = jsCode;
       inlineEl.onerror = function() {
-        window.dispatchEvent(new ErrorEvent('error', {
-          message: 'Failed to execute bundled Blob module script (and inline module fallback failed)'
-        }));
+        tryImportDiagnostic(failedBlobUrl, 'Failed to execute bundled Blob module script (and inline module fallback failed)');
       };
       document.body.appendChild(inlineEl);
       return;
@@ -1133,9 +1144,7 @@ function buildBlobModuleLoaderMarkup(compiledJs: string): string {
       inlineEl.setAttribute('data-ve-fallback', 'inline');
       inlineEl.textContent = jsCode;
       inlineEl.onerror = function() {
-        window.dispatchEvent(new ErrorEvent('error', {
-          message: 'Failed to execute bundled Blob module script (check browser console for transitive dependency error)'
-        }));
+        tryImportDiagnostic(failedBlobUrl, 'Failed to execute bundled Blob module script (check browser console for transitive dependency error)');
       };
       document.body.appendChild(inlineEl);
     });
@@ -1149,7 +1158,7 @@ function buildBlobModuleLoaderMarkup(compiledJs: string): string {
     scriptEl.setAttribute('data-ve-bundled', 'true');
     scriptEl.src = blobUrl;
     scriptEl.onerror = function() {
-      diagnoseFailureAndReport(payload.js);
+      diagnoseFailureAndReport(payload.js, blobUrl);
     };
     document.body.appendChild(scriptEl);
   } catch (err) {
@@ -1415,10 +1424,10 @@ export function buildSrcDoc(
     bodyInjections.push(bridgeMarkup);
   }
 
-  if (bodyInjections.length > 0) {
+    if (bodyInjections.length > 0) {
     const bodyBlock = bodyInjections.join('\n');
     if (/<\/body>/i.test(html)) {
-      html = html.replace(/<\/body>/i, `${bodyBlock}\n</body>`);
+      html = html.replace(/<\/body>/i, () => `${bodyBlock}\n</body>`);
     } else {
       html = `${html}\n${bodyBlock}`;
     }

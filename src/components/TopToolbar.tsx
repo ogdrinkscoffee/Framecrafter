@@ -29,7 +29,11 @@ import type {
   ViewportPreset,
 } from '../types/editor';
 import type { GitHubConnectionConfig } from '../utils/githubSync';
-import { GitHubCommitModal, GitHubSyncPopover } from './GitHubSyncModal';
+import {
+  GitHubCommitModal,
+  type GitHubOAuthProps,
+  GitHubSyncPopover,
+} from './GitHubSyncModal';
 import {
   DuotoneUndoIcon,
   FramecraftLogoMark,
@@ -48,7 +52,7 @@ const STUDIO_THEMES: Array<{
   { id: 'paper', label: 'Warm Paper Light', mode: 'light', swatch: '#f5f2eb' },
 ];
 
-interface TopToolbarProps {
+interface TopToolbarProps extends GitHubOAuthProps {
   projectName: string;
   editorMode: EditorMode;
   onChangeMode: (mode: EditorMode) => void;
@@ -125,6 +129,20 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onPullFromGitHub,
   onPushToGitHub,
   onToggleGithubAutoSync,
+  githubUser,
+  githubAccountReadOnly,
+  githubRepos,
+  githubReposLoading,
+  githubReposError,
+  githubConnecting,
+  githubOAuthConfigured,
+  githubCallbackUrl,
+  onConnectGitHub,
+  onDisconnectGitHub,
+  onRefreshGitHubRepos,
+  onBrowseGitHubUsername,
+  onFetchRepoBranches,
+  onSwitchBranch,
 }) => {
   const filesInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -202,7 +220,6 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             ref={folderInputRef}
             type="file"
             multiple
-            // @ts-expect-error webkitdirectory is supported in Chromium/Firefox/Safari
             webkitdirectory=""
             className="hidden"
             onChange={handleFileChange}
@@ -492,6 +509,20 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             onPullFromGitHub={onPullFromGitHub}
             onPushToGitHub={onPushToGitHub}
             onToggleAutoSync={onToggleGithubAutoSync}
+            githubUser={githubUser}
+            githubAccountReadOnly={githubAccountReadOnly}
+            githubRepos={githubRepos}
+            githubReposLoading={githubReposLoading}
+            githubReposError={githubReposError}
+            githubConnecting={githubConnecting}
+            githubOAuthConfigured={githubOAuthConfigured}
+            githubCallbackUrl={githubCallbackUrl}
+            onConnectGitHub={onConnectGitHub}
+            onDisconnectGitHub={onDisconnectGitHub}
+            onRefreshGitHubRepos={onRefreshGitHubRepos}
+            onBrowseGitHubUsername={onBrowseGitHubUsername}
+            onFetchRepoBranches={onFetchRepoBranches}
+            onSwitchBranch={onSwitchBranch}
           />
         </div>
 
@@ -519,6 +550,12 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         statusError={githubStatusError}
         statusMessage={githubStatusMessage}
         requiresAuthPrompt={githubRequiresAuthPrompt}
+        githubUser={githubUser}
+        githubRepos={githubRepos}
+        githubConnecting={githubConnecting}
+        onConnectGitHub={onConnectGitHub}
+        onFetchRepoBranches={onFetchRepoBranches}
+        onSwitchBranch={onSwitchBranch}
         onPullFromGitHub={onPullFromGitHub}
         onPushToGitHub={onPushToGitHub}
       />

@@ -422,7 +422,27 @@ export async function bundleProjectFiles(
           return undefined;
         });
 
-        build.onLoad({ filter: /.*/, namespace: 've-noop-stub' }, () => {
+        build.onLoad({ filter: /.*/, namespace: 've-noop-stub' }, (args) => {
+          if (args.path === 'virtual:pwa-register') {
+            return {
+              contents:
+                'export function registerSW(_options = {}) { return async function updateSW(_reloadPage) {}; } export default { registerSW };',
+              loader: 'js',
+            };
+          }
+          if (args.path.startsWith('virtual:pwa-register/')) {
+            return {
+              contents:
+                'export function useRegisterSW(_options = {}) { const noop = () => {}; const updateServiceWorker = async () => {}; return { offlineReady: [false, noop], needRefresh: [false, noop], updateServiceWorker }; } export function registerSW(_options = {}) { return async function updateSW(_reloadPage) {}; } export default { useRegisterSW, registerSW };',
+              loader: 'js',
+            };
+          }
+          if (args.path === 'virtual:pwa-info') {
+            return {
+              contents: 'export const pwaInfo = undefined; export default pwaInfo;',
+              loader: 'js',
+            };
+          }
           return {
             contents: 'export default {};',
             loader: 'js',

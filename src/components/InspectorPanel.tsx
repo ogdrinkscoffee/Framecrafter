@@ -147,6 +147,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const [topDraft, setTopDraft] = useState('');
   const [leftDraft, setLeftDraft] = useState('');
   const [gapDraft, setGapDraft] = useState('');
+  const [maxWidthDraft, setMaxWidthDraft] = useState('');
+  const [gridColsDraft, setGridColsDraft] = useState('');
+  const [textColorDraft, setTextColorDraft] = useState('');
+  const [bgColorDraft, setBgColorDraft] = useState('');
+  const [spacingPerSideOpen, setSpacingPerSideOpen] = useState(false);
+  const [padSideDrafts, setPadSideDrafts] = useState({ top: '0', right: '0', bottom: '0', left: '0' });
+  const [marginSideDrafts, setMarginSideDrafts] = useState({ top: '0', right: '0', bottom: '0', left: '0' });
   const [cellPaddingDraft, setCellPaddingDraft] = useState('10px 12px');
   const [imgSrcDraft, setImgSrcDraft] = useState('');
   const [imgAltDraft, setImgAltDraft] = useState('');
@@ -276,6 +283,39 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     setTopDraft(pick('top', selectedElement.styles.top));
     setLeftDraft(pick('left', selectedElement.styles.left));
     setGapDraft(pick('gap', selectedElement.styles.gap === 'normal' ? '0px' : selectedElement.styles.gap));
+    setMaxWidthDraft(pick('max-width', selectedElement.styles.maxWidth || 'none'));
+    setGridColsDraft(pick('grid-template-columns', selectedElement.styles.gridTemplateColumns || ''));
+
+    if (isNewElement || activeId !== 'prop-text-color-hex') {
+      const nextTextColor =
+        (responsiveScope !== 'all' && scopeOverrides.color) ||
+        cssColorToHex(selectedElement.styles.color) ||
+        selectedElement.styles.color;
+      setTextColorDraft(nextTextColor);
+    }
+    if (isNewElement || activeId !== 'prop-bg-color-hex') {
+      const nextBgColor =
+        (responsiveScope !== 'all' && scopeOverrides['background-color']) ||
+        cssColorToHex(selectedElement.styles.backgroundColor) ||
+        selectedElement.styles.backgroundColor;
+      setBgColorDraft(nextBgColor);
+    }
+    if (selectedElement.boxModel && (isNewElement || !activeId.startsWith('prop-pad-'))) {
+      setPadSideDrafts({
+        top: String(selectedElement.boxModel.padding.top),
+        right: String(selectedElement.boxModel.padding.right),
+        bottom: String(selectedElement.boxModel.padding.bottom),
+        left: String(selectedElement.boxModel.padding.left),
+      });
+    }
+    if (selectedElement.boxModel && (isNewElement || !activeId.startsWith('prop-margin-'))) {
+      setMarginSideDrafts({
+        top: String(selectedElement.boxModel.margin.top),
+        right: String(selectedElement.boxModel.margin.right),
+        bottom: String(selectedElement.boxModel.margin.bottom),
+        left: String(selectedElement.boxModel.margin.left),
+      });
+    }
 
     if (selectedElement.svgShape) {
       const nextShape = selectedElement.svgShape;
@@ -390,6 +430,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const effectiveBorderStyle =
     (responsiveScope !== 'all' && scopeOverrides['border-style']) ||
     selectedElement.styles.borderStyle;
+  const effectiveJustify =
+    (responsiveScope !== 'all' && scopeOverrides['justify-content']) ||
+    selectedElement.styles.justifyContent ||
+    'flex-start';
+  const effectiveAlign =
+    (responsiveScope !== 'all' && scopeOverrides['align-items']) ||
+    selectedElement.styles.alignItems ||
+    'stretch';
+  const effectiveFlexWrap =
+    (responsiveScope !== 'all' && scopeOverrides['flex-wrap']) ||
+    selectedElement.styles.flexWrap ||
+    'nowrap';
+  const effectiveOverflow =
+    (responsiveScope !== 'all' && scopeOverrides.overflow) ||
+    selectedElement.styles.overflow ||
+    'visible';
 
   const isBold = effectiveFontWeight === 'bold' || Number(effectiveFontWeight) >= 600;
   const isItalic = effectiveFontStyle === 'italic';
@@ -508,12 +564,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   };
 
   const nudgePosition = (dx: number, dy: number) => {
-    const parsePx = (val: string) => {
-      const num = parseFloat(val);
-      return Number.isFinite(num) ? num : 0;
+    const parseAxisPx = (val: string, fallbackOffset?: number) => {
+      if (val && val !== 'auto') {
+        const num = parseFloat(val);
+        if (Number.isFinite(num)) return num;
+      }
+      if (
+        (effectivePosition === 'absolute' || effectivePosition === 'fixed') &&
+        typeof fallbackOffset === 'number' &&
+        Number.isFinite(fallbackOffset)
+      ) {
+        return fallbackOffset;
+      }
+      return 0;
     };
-    const nextLeft = Math.round(parsePx(leftDraft || '0') + dx);
-    const nextTop = Math.round(parsePx(topDraft || '0') + dy);
+    const nextLeft = Math.round(parseAxisPx(leftDraft || '0', selectedElement.offsetLeft) + dx);
+    const nextTop = Math.round(parseAxisPx(topDraft || '0', selectedElement.offsetTop) + dy);
 
     const patch: Record<string, string> = {
       left: `${nextLeft}px`,
@@ -521,6 +587,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     };
     if (effectivePosition === 'static') {
       patch.position = 'relative';
+    } else if (effectivePosition === 'absolute' || effectivePosition === 'fixed') {
+      if (selectedElement.styles.right && selectedElement.styles.right !== 'auto') {
+        patch.right = 'auto';
+      }
+      if (selectedElement.styles.bottom && selectedElement.styles.bottom !== 'auto') {
+        patch.bottom = 'auto';
+      }
     }
     commitStylePatch(patch, 'Nudge element position');
   };
@@ -1675,10 +1748,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   />
                 </span>
                 <input
+                  id="prop-text-color-hex"
                   type="text"
                   aria-label="Text color hex"
-                  value={textColorHex}
-                  onChange={(e) => commitField('color', e.target.value, 'Update text color')}
+                  value={textColorDraft}
+                  onChange={(e) => {
+                    const nextVal = e.target.value;
+                    setTextColorDraft(nextVal);
+                    if (responsiveScope === 'all' && nextVal.trim()) {
+                      onPreviewStyle({ color: nextVal });
+                    }
+                  }}
+                  onBlur={() => commitField('color', textColorDraft.trim(), 'Update text color')}
+                  onKeyDown={(e) =>
+                    e.key === 'Enter' &&
+                    commitField('color', textColorDraft.trim(), 'Update text color')
+                  }
                   className="flex-1 min-w-0 bg-transparent text-[12px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none"
                 />
               </div>
@@ -1799,6 +1884,112 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </div>
             </div>
           </div>
+
+          {(effectiveDisplay.includes('flex') || effectiveDisplay.includes('grid')) && (
+            <div className="space-y-2.5 pt-1 border-t border-[var(--studio-border-subtle)]">
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label htmlFor="prop-justify" className="block text-[12px] font-medium text-[var(--studio-text-strong)] mb-1">
+                    Justify
+                  </label>
+                  <select
+                    id="prop-justify"
+                    value={effectiveJustify}
+                    onChange={(e) => commitField('justify-content', e.target.value, 'Update justify content')}
+                    className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2 py-1.5 text-[11.5px] text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="flex-start">start</option>
+                    <option value="center">center</option>
+                    <option value="flex-end">end</option>
+                    <option value="space-between">space-between</option>
+                    <option value="space-around">space-around</option>
+                    <option value="space-evenly">space-evenly</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="prop-align-items" className="block text-[12px] font-medium text-[var(--studio-text-strong)] mb-1">
+                    Align Items
+                  </label>
+                  <select
+                    id="prop-align-items"
+                    value={effectiveAlign}
+                    onChange={(e) => commitField('align-items', e.target.value, 'Update align items')}
+                    className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2 py-1.5 text-[11.5px] text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="stretch">stretch</option>
+                    <option value="flex-start">start</option>
+                    <option value="center">center</option>
+                    <option value="flex-end">end</option>
+                    <option value="baseline">baseline</option>
+                  </select>
+                </div>
+              </div>
+
+              {effectiveDisplay.includes('flex') && (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12px] font-medium text-[var(--studio-text-strong)]">Flex Wrap</span>
+                  <div className="grid grid-cols-2 gap-0.5 bg-[var(--studio-bg)] border border-[var(--studio-border)] rounded-lg p-0.5 w-36">
+                    {(['nowrap', 'wrap'] as const).map((wrapVal) => (
+                      <button
+                        key={wrapVal}
+                        type="button"
+                        aria-pressed={effectiveFlexWrap === wrapVal}
+                        onClick={() => commitField('flex-wrap', wrapVal, 'Update flex wrap')}
+                        className={`py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
+                          effectiveFlexWrap === wrapVal
+                            ? 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs'
+                            : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
+                        }`}
+                      >
+                        {wrapVal}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {effectiveDisplay.includes('grid') && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="prop-grid-cols" className="text-[12px] font-medium text-[var(--studio-text-strong)]">
+                      Grid Columns
+                    </label>
+                    <div className="flex items-center gap-1">
+                      {[1, 2, 3, 4].map((cols) => {
+                        const val = `repeat(${cols}, minmax(0, 1fr))`;
+                        return (
+                          <button
+                            key={cols}
+                            type="button"
+                            onClick={() => {
+                              setGridColsDraft(val);
+                              commitField('grid-template-columns', val, `Set ${cols} grid columns`);
+                            }}
+                            className="px-1.5 py-0.5 rounded bg-[var(--studio-input)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] text-[10.5px] font-mono-tabular text-[var(--studio-text)] cursor-pointer"
+                          >
+                            {cols}c
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <input
+                    id="prop-grid-cols"
+                    type="text"
+                    value={gridColsDraft}
+                    placeholder="e.g. repeat(3, minmax(0, 1fr))"
+                    onChange={(e) => setGridColsDraft(e.target.value)}
+                    onBlur={() => commitField('grid-template-columns', gridColsDraft, 'Update grid columns')}
+                    onKeyDown={(e) =>
+                      e.key === 'Enter' &&
+                      commitField('grid-template-columns', gridColsDraft, 'Update grid columns')
+                    }
+                    className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2.5 py-1.5 text-[11.5px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Size & Position */}
@@ -1820,98 +2011,184 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
           <div className="grid grid-cols-2 gap-2.5">
             <div>
-              <label htmlFor="prop-width" className="block text-[12.5px] font-medium text-[var(--studio-text-strong)] mb-1">
-                Width
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="prop-width" className="text-[12.5px] font-medium text-[var(--studio-text-strong)]">
+                  Width
+                </label>
+                <div className="flex items-center gap-1">
+                  {[
+                    { label: 'Auto', val: 'auto' },
+                    { label: '100%', val: '100%' },
+                    { label: 'Fit', val: 'fit-content' },
+                  ].map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => {
+                        setWidthDraft(p.val);
+                        commitField('width', p.val, `Set width ${p.val}`);
+                      }}
+                      className="px-1 py-0.5 rounded bg-[var(--studio-bg)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] text-[9.5px] font-mono-tabular text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] cursor-pointer"
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <input
                 id="prop-width"
                 type="text"
                 value={widthDraft}
                 onChange={(e) => setWidthDraft(e.target.value)}
                 onBlur={() => {
-                  const numW = parseFloat(widthDraft);
+                  const trimmed = widthDraft.trim();
+                  const isNumericPx = /^-?\d+(?:\.\d+)?(?:px)?$/i.test(trimmed);
+                  const numW = parseFloat(trimmed);
                   const rectRatio =
                     selectedElement.rect.height > 0
                       ? selectedElement.rect.width / selectedElement.rect.height
                       : 1;
-                  if (aspectRatioLocked && Number.isFinite(numW) && numW > 0 && rectRatio > 0) {
+                  if (aspectRatioLocked && isNumericPx && Number.isFinite(numW) && numW > 0 && rectRatio > 0) {
                     const nextH = `${Math.max(16, Math.round(numW / rectRatio))}px`;
                     setHeightDraft(nextH);
                     commitStylePatch(
-                      { width: widthDraft, height: nextH },
+                      { width: trimmed.endsWith('px') ? trimmed : `${numW}px`, height: nextH },
                       'Scale width proportionally'
                     );
                   } else {
-                    commitField('width', widthDraft, 'Update width');
+                    commitField('width', trimmed, 'Update width');
                   }
                 }}
                 onKeyDown={(e) => {
                   if (e.key !== 'Enter') return;
-                  const numW = parseFloat(widthDraft);
+                  const trimmed = widthDraft.trim();
+                  const isNumericPx = /^-?\d+(?:\.\d+)?(?:px)?$/i.test(trimmed);
+                  const numW = parseFloat(trimmed);
                   const rectRatio =
                     selectedElement.rect.height > 0
                       ? selectedElement.rect.width / selectedElement.rect.height
                       : 1;
-                  if (aspectRatioLocked && Number.isFinite(numW) && numW > 0 && rectRatio > 0) {
+                  if (aspectRatioLocked && isNumericPx && Number.isFinite(numW) && numW > 0 && rectRatio > 0) {
                     const nextH = `${Math.max(16, Math.round(numW / rectRatio))}px`;
                     setHeightDraft(nextH);
                     commitStylePatch(
-                      { width: widthDraft, height: nextH },
+                      { width: trimmed.endsWith('px') ? trimmed : `${numW}px`, height: nextH },
                       'Scale width proportionally'
                     );
                   } else {
-                    commitField('width', widthDraft, 'Update width');
+                    commitField('width', trimmed, 'Update width');
                   }
                 }}
                 className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
             <div>
-              <label htmlFor="prop-height" className="block text-[12.5px] font-medium text-[var(--studio-text-strong)] mb-1">
-                Height
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="prop-height" className="text-[12.5px] font-medium text-[var(--studio-text-strong)]">
+                  Height
+                </label>
+                <div className="flex items-center gap-1">
+                  {[
+                    { label: 'Auto', val: 'auto' },
+                    { label: '100%', val: '100%' },
+                  ].map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => {
+                        setHeightDraft(p.val);
+                        commitField('height', p.val, `Set height ${p.val}`);
+                      }}
+                      className="px-1 py-0.5 rounded bg-[var(--studio-bg)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] text-[9.5px] font-mono-tabular text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] cursor-pointer"
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <input
                 id="prop-height"
                 type="text"
                 value={heightDraft}
                 onChange={(e) => setHeightDraft(e.target.value)}
                 onBlur={() => {
-                  const numH = parseFloat(heightDraft);
+                  const trimmed = heightDraft.trim();
+                  const isNumericPx = /^-?\d+(?:\.\d+)?(?:px)?$/i.test(trimmed);
+                  const numH = parseFloat(trimmed);
                   const rectRatio =
                     selectedElement.rect.height > 0
                       ? selectedElement.rect.width / selectedElement.rect.height
                       : 1;
-                  if (aspectRatioLocked && Number.isFinite(numH) && numH > 0 && rectRatio > 0) {
+                  if (aspectRatioLocked && isNumericPx && Number.isFinite(numH) && numH > 0 && rectRatio > 0) {
                     const nextW = `${Math.max(20, Math.round(numH * rectRatio))}px`;
                     setWidthDraft(nextW);
                     commitStylePatch(
-                      { width: nextW, height: heightDraft },
+                      { width: nextW, height: trimmed.endsWith('px') ? trimmed : `${numH}px` },
                       'Scale height proportionally'
                     );
                   } else {
-                    commitField('height', heightDraft, 'Update height');
+                    commitField('height', trimmed, 'Update height');
                   }
                 }}
                 onKeyDown={(e) => {
                   if (e.key !== 'Enter') return;
-                  const numH = parseFloat(heightDraft);
+                  const trimmed = heightDraft.trim();
+                  const isNumericPx = /^-?\d+(?:\.\d+)?(?:px)?$/i.test(trimmed);
+                  const numH = parseFloat(trimmed);
                   const rectRatio =
                     selectedElement.rect.height > 0
                       ? selectedElement.rect.width / selectedElement.rect.height
                       : 1;
-                  if (aspectRatioLocked && Number.isFinite(numH) && numH > 0 && rectRatio > 0) {
+                  if (aspectRatioLocked && isNumericPx && Number.isFinite(numH) && numH > 0 && rectRatio > 0) {
                     const nextW = `${Math.max(20, Math.round(numH * rectRatio))}px`;
                     setWidthDraft(nextW);
                     commitStylePatch(
-                      { width: nextW, height: heightDraft },
+                      { width: nextW, height: trimmed.endsWith('px') ? trimmed : `${numH}px` },
                       'Scale height proportionally'
                     );
                   } else {
-                    commitField('height', heightDraft, 'Update height');
+                    commitField('height', trimmed, 'Update height');
                   }
                 }}
                 className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5">
+            <div>
+              <label htmlFor="prop-max-width" className="block text-[12px] font-medium text-[var(--studio-text-strong)] mb-1">
+                Max Width
+              </label>
+              <input
+                id="prop-max-width"
+                type="text"
+                value={maxWidthDraft}
+                onChange={(e) => setMaxWidthDraft(e.target.value)}
+                onBlur={() => commitField('max-width', maxWidthDraft.trim(), 'Update max width')}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' &&
+                  commitField('max-width', maxWidthDraft.trim(), 'Update max width')
+                }
+                placeholder="none"
+                className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+            <div>
+              <label htmlFor="prop-overflow" className="block text-[12px] font-medium text-[var(--studio-text-strong)] mb-1">
+                Overflow
+              </label>
+              <select
+                id="prop-overflow"
+                value={effectiveOverflow}
+                onChange={(e) => commitField('overflow', e.target.value, 'Update overflow')}
+                className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2 py-1.5 text-[12px] text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+              >
+                <option value="visible">visible</option>
+                <option value="hidden">hidden</option>
+                <option value="auto">auto</option>
+                <option value="clip">clip</option>
+              </select>
             </div>
           </div>
 
@@ -1953,6 +2230,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 <option value="static">static</option>
                 <option value="relative">relative</option>
                 <option value="absolute">absolute</option>
+                <option value="fixed">fixed</option>
+                <option value="sticky">sticky</option>
               </select>
             </div>
             <div>
@@ -1964,7 +2243,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 type="text"
                 value={leftDraft}
                 onChange={(e) => setLeftDraft(e.target.value)}
-                onBlur={() => commitField('left', leftDraft, 'Update left offset')}
+                onBlur={() => commitField('left', leftDraft.trim(), 'Update left offset')}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' && commitField('left', leftDraft.trim(), 'Update left offset')
+                }
                 className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
@@ -1977,11 +2259,31 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 type="text"
                 value={topDraft}
                 onChange={(e) => setTopDraft(e.target.value)}
-                onBlur={() => commitField('top', topDraft, 'Update top offset')}
+                onBlur={() => commitField('top', topDraft.trim(), 'Update top offset')}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' && commitField('top', topDraft.trim(), 'Update top offset')
+                }
                 className="w-full rounded-lg bg-[var(--studio-input)] border border-[var(--studio-border)] studio-card-highlight px-2 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
               />
             </div>
           </div>
+
+          {effectivePosition !== 'static' && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() =>
+                  commitStylePatch(
+                    { position: null, left: null, top: null, right: null, bottom: null },
+                    'Reset positioning'
+                  )
+                }
+                className="text-[11px] font-medium text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] cursor-pointer"
+              >
+                Reset position offsets
+              </button>
+            </div>
+          )}
 
           <div className="flex items-center justify-between pt-1">
             <span className="text-[12.5px] font-medium text-[var(--studio-text-strong)]">Nudge (8px)</span>
@@ -2268,15 +2570,23 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 />
               </span>
               <input
+                id="prop-bg-color-hex"
                 type="text"
                 aria-label="Background color value"
-                value={
-                  (responsiveScope !== 'all' && scopeOverrides['background-color']) ||
-                  cssColorToHex(selectedElement.styles.backgroundColor) ||
-                  selectedElement.styles.backgroundColor
+                value={bgColorDraft}
+                onChange={(e) => {
+                  const nextVal = e.target.value;
+                  setBgColorDraft(nextVal);
+                  if (responsiveScope === 'all' && nextVal.trim()) {
+                    onPreviewStyle({ 'background-color': nextVal });
+                  }
+                }}
+                onBlur={() =>
+                  commitField('background-color', bgColorDraft.trim(), 'Update background color')
                 }
-                onChange={(e) =>
-                  commitField('background-color', e.target.value, 'Update background color')
+                onKeyDown={(e) =>
+                  e.key === 'Enter' &&
+                  commitField('background-color', bgColorDraft.trim(), 'Update background color')
                 }
                 className="flex-1 min-w-0 bg-transparent text-[12px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none"
               />
@@ -2294,6 +2604,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 value={borderWidthDraft}
                 onChange={(e) => setBorderWidthDraft(e.target.value)}
                 onBlur={() => {
+                  const patch: Record<string, string> = { 'border-width': borderWidthDraft };
+                  if (effectiveBorderStyle === 'none' && parseFloat(borderWidthDraft) > 0) {
+                    patch['border-style'] = 'solid';
+                  }
+                  commitStylePatch(patch, 'Update border width');
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return;
                   const patch: Record<string, string> = { 'border-width': borderWidthDraft };
                   if (effectiveBorderStyle === 'none' && parseFloat(borderWidthDraft) > 0) {
                     patch['border-style'] = 'solid';
@@ -2377,6 +2695,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 <span className="w-2 h-2 rounded-xs bg-amber-500/70 inline-block" />
                 Margin
               </span>
+              <button
+                type="button"
+                onClick={() => setSpacingPerSideOpen((prev) => !prev)}
+                className="text-[10.5px] font-sans font-medium text-indigo-500 dark:text-indigo-400 hover:underline cursor-pointer"
+              >
+                {spacingPerSideOpen ? 'Simple' : '4-side'}
+              </button>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2.5">
@@ -2427,6 +2752,98 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               />
             </div>
           </div>
+
+          {spacingPerSideOpen && (
+            <div className="space-y-2.5 pt-1 border-t border-[var(--studio-border-subtle)]">
+              <div
+                onMouseEnter={() => onHoverSpacing('padding')}
+                onMouseLeave={() => onHoverSpacing(null)}
+                className="space-y-1"
+              >
+                <span className="block text-[11px] font-medium text-emerald-700 dark:text-emerald-300/90">
+                  Padding sides (px)
+                </span>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {(['top', 'right', 'bottom', 'left'] as const).map((side) => {
+                    const commitSide = () => {
+                      const raw = padSideDrafts[side].trim() || '0';
+                      const cssVal = /^-?\d+(?:\.\d+)?$/.test(raw) ? `${raw}px` : raw;
+                      commitField(`padding-${side}`, cssVal, `Update padding-${side}`);
+                    };
+                    return (
+                      <div key={`pad-${side}`}>
+                        <label
+                          htmlFor={`prop-pad-${side}`}
+                          className="block text-[10px] uppercase text-[var(--studio-muted-soft)] mb-0.5"
+                        >
+                          {side[0]}
+                        </label>
+                        <input
+                          id={`prop-pad-${side}`}
+                          type="text"
+                          value={padSideDrafts[side]}
+                          onFocus={() => onHoverSpacing('padding')}
+                          onChange={(e) =>
+                            setPadSideDrafts((prev) => ({ ...prev, [side]: e.target.value }))
+                          }
+                          onBlur={() => {
+                            onHoverSpacing(null);
+                            commitSide();
+                          }}
+                          onKeyDown={(e) => e.key === 'Enter' && commitSide()}
+                          className="w-full h-6 rounded bg-[var(--studio-input)] border border-[var(--studio-border)] px-1.5 text-[11px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div
+                onMouseEnter={() => onHoverSpacing('margin')}
+                onMouseLeave={() => onHoverSpacing(null)}
+                className="space-y-1"
+              >
+                <span className="block text-[11px] font-medium text-amber-700 dark:text-amber-300/90">
+                  Margin sides (px)
+                </span>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {(['top', 'right', 'bottom', 'left'] as const).map((side) => {
+                    const commitSide = () => {
+                      const raw = marginSideDrafts[side].trim() || '0';
+                      const cssVal = /^-?\d+(?:\.\d+)?$/.test(raw) ? `${raw}px` : raw;
+                      commitField(`margin-${side}`, cssVal, `Update margin-${side}`);
+                    };
+                    return (
+                      <div key={`mar-${side}`}>
+                        <label
+                          htmlFor={`prop-margin-${side}`}
+                          className="block text-[10px] uppercase text-[var(--studio-muted-soft)] mb-0.5"
+                        >
+                          {side[0]}
+                        </label>
+                        <input
+                          id={`prop-margin-${side}`}
+                          type="text"
+                          value={marginSideDrafts[side]}
+                          onFocus={() => onHoverSpacing('margin')}
+                          onChange={(e) =>
+                            setMarginSideDrafts((prev) => ({ ...prev, [side]: e.target.value }))
+                          }
+                          onBlur={() => {
+                            onHoverSpacing(null);
+                            commitSide();
+                          }}
+                          onKeyDown={(e) => e.key === 'Enter' && commitSide()}
+                          className="w-full h-6 rounded bg-[var(--studio-input)] border border-[var(--studio-border)] px-1.5 text-[11px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </section>
       </div>
 

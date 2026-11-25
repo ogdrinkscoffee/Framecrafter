@@ -203,6 +203,8 @@ type DragSessionState =
       startTop: number;
       currentLeft: number;
       currentTop: number;
+      clearRight: boolean;
+      clearBottom: boolean;
       wasInline: boolean;
       aspectLocked: boolean;
       proportionalActive: boolean;
@@ -216,6 +218,8 @@ type DragSessionState =
       startTop: number;
       currentLeft: number;
       currentTop: number;
+      clearRight: boolean;
+      clearBottom: boolean;
     };
 
 export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
@@ -316,6 +320,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const effectiveFrameWidthPx =
     canvasWidthPx ??
     (viewport === 'mobile' ? 375 : viewport === 'tablet' ? 768 : Math.min(1200, Math.max(600, stageSize.width - 48)));
+
+  const effectiveFrameHeightPx =
+    canvasHeightPx ?? Math.max(480, Math.round(stageSize.height - 44));
 
   const zoomScale = useMemo(() => {
     if (canvasZoom === '50') return 0.5;
@@ -452,11 +459,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       if (current.kind === 'move') {
         const nextLeft = Math.round(current.startLeft + dx);
         const nextTop = Math.round(current.startTop + dy);
-        previewStyleRef.current({
+        const movePatch: Record<string, string> = {
           position: current.targetPosition,
           left: `${nextLeft}px`,
           top: `${nextTop}px`,
-        });
+        };
+        if (current.clearRight) movePatch.right = 'auto';
+        if (current.clearBottom) movePatch.bottom = 'auto';
+        previewStyleRef.current(movePatch);
         setDragState((prev) =>
           prev && prev.kind === 'move' ? { ...prev, currentLeft: nextLeft, currentTop: nextTop } : prev
         );
@@ -507,10 +517,16 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         }
       }
 
-      if (current.dir.includes('w') && (current.startPosition === 'relative' || current.startPosition === 'absolute')) {
+      const isPositioned =
+        current.startPosition === 'relative' ||
+        current.startPosition === 'absolute' ||
+        current.startPosition === 'fixed' ||
+        current.startPosition === 'sticky';
+
+      if (current.dir.includes('w') && isPositioned) {
         nextLeft = Math.round(current.startLeft + (current.startRect.width - nextW));
       }
-      if (current.dir.includes('n') && (current.startPosition === 'relative' || current.startPosition === 'absolute')) {
+      if (current.dir.includes('n') && isPositioned) {
         nextTop = Math.round(current.startTop + (current.startRect.height - nextH));
       }
 
@@ -522,14 +538,16 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       }
       if (proportional || current.dir.includes('e') || current.dir.includes('w')) {
         patch.width = `${nextW}px`;
-        if (current.dir.includes('w') && (current.startPosition === 'relative' || current.startPosition === 'absolute')) {
+        if (current.dir.includes('w') && isPositioned) {
           patch.left = `${nextLeft}px`;
+          if (current.clearRight) patch.right = 'auto';
         }
       }
       if (proportional || current.dir.includes('s') || current.dir.includes('n')) {
         patch.height = `${nextH}px`;
-        if (current.dir.includes('n') && (current.startPosition === 'relative' || current.startPosition === 'absolute')) {
+        if (current.dir.includes('n') && isPositioned) {
           patch.top = `${nextTop}px`;
+          if (current.clearBottom) patch.bottom = 'auto';
         }
       }
 
@@ -554,16 +572,22 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
       if (current.kind === 'move') {
         setDragState(null);
-        commitStyleRef.current(
-          {
-            position: current.targetPosition,
-            left: `${current.currentLeft}px`,
-            top: `${current.currentTop}px`,
-          },
-          'Move element'
-        );
+        const moveCommitPatch: Record<string, string | null> = {
+          position: current.targetPosition,
+          left: `${current.currentLeft}px`,
+          top: `${current.currentTop}px`,
+        };
+        if (current.clearRight) moveCommitPatch.right = 'auto';
+        if (current.clearBottom) moveCommitPatch.bottom = 'auto';
+        commitStyleRef.current(moveCommitPatch, 'Move element');
         return;
       }
+
+      const isPositioned =
+        current.startPosition === 'relative' ||
+        current.startPosition === 'absolute' ||
+        current.startPosition === 'fixed' ||
+        current.startPosition === 'sticky';
 
       const patch: Record<string, string> = {
         'box-sizing': 'border-box',
@@ -573,14 +597,16 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       }
       if (current.proportionalActive || current.dir.includes('e') || current.dir.includes('w')) {
         patch.width = `${current.currentWidth}px`;
-        if (current.dir.includes('w') && (current.startPosition === 'relative' || current.startPosition === 'absolute')) {
+        if (current.dir.includes('w') && isPositioned) {
           patch.left = `${current.currentLeft}px`;
+          if (current.clearRight) patch.right = 'auto';
         }
       }
       if (current.proportionalActive || current.dir.includes('s') || current.dir.includes('n')) {
         patch.height = `${current.currentHeight}px`;
-        if (current.dir.includes('n') && (current.startPosition === 'relative' || current.startPosition === 'absolute')) {
+        if (current.dir.includes('n') && isPositioned) {
           patch.top = `${current.currentTop}px`;
+          if (current.clearBottom) patch.bottom = 'auto';
         }
       }
       setDragState(null);
@@ -600,12 +626,32 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     };
   }, [isDraggingOverlay]);
 
+  const resolveStartCoord = (el: SelectedElementInfo, axis: 'left' | 'top'): number => {
+    const raw = axis === 'left' ? el.styles.left : el.styles.top;
+    if (raw && raw !== 'auto') {
+      const parsed = parseFloat(raw);
+      if (Number.isFinite(parsed)) return Math.round(parsed);
+    }
+    if (el.styles.position === 'absolute' || el.styles.position === 'fixed') {
+      const fallback = axis === 'left' ? el.offsetLeft : el.offsetTop;
+      if (typeof fallback === 'number' && Number.isFinite(fallback)) return Math.round(fallback);
+    }
+    return 0;
+  };
+
+  const hasSideAnchorConflict = (el: SelectedElementInfo, side: 'right' | 'bottom'): boolean => {
+    const pos = el.styles.position;
+    if (pos !== 'absolute' && pos !== 'fixed') return false;
+    const val = side === 'right' ? el.styles.right : el.styles.bottom;
+    return Boolean(val && val !== 'auto');
+  };
+
   const startResize = (dir: ResizeHandleDir, e: React.PointerEvent) => {
     if (!selectedElement) return;
     e.preventDefault();
     e.stopPropagation();
-    const parsedLeft = parseFloat(selectedElement.styles.left);
-    const parsedTop = parseFloat(selectedElement.styles.top);
+    const startLeft = resolveStartCoord(selectedElement, 'left');
+    const startTop = resolveStartCoord(selectedElement, 'top');
     const isDiagonal = dir === 'nw' || dir === 'ne' || dir === 'sw' || dir === 'se';
     setDragState({
       kind: 'resize',
@@ -616,10 +662,12 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       currentWidth: Math.round(selectedElement.rect.width),
       currentHeight: Math.round(selectedElement.rect.height),
       startPosition: selectedElement.styles.position || 'static',
-      startLeft: Number.isFinite(parsedLeft) ? parsedLeft : 0,
-      startTop: Number.isFinite(parsedTop) ? parsedTop : 0,
-      currentLeft: Number.isFinite(parsedLeft) ? parsedLeft : 0,
-      currentTop: Number.isFinite(parsedTop) ? parsedTop : 0,
+      startLeft,
+      startTop,
+      currentLeft: startLeft,
+      currentTop: startTop,
+      clearRight: hasSideAnchorConflict(selectedElement, 'right'),
+      clearBottom: hasSideAnchorConflict(selectedElement, 'bottom'),
       wasInline: selectedElement.styles.display === 'inline',
       aspectLocked: aspectRatioLocked,
       proportionalActive: isDiagonal && (aspectRatioLocked || e.shiftKey),
@@ -630,10 +678,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     if (!selectedElement) return;
     e.preventDefault();
     e.stopPropagation();
-    const parsedLeft = parseFloat(selectedElement.styles.left);
-    const parsedTop = parseFloat(selectedElement.styles.top);
-    const startLeft = Number.isFinite(parsedLeft) ? parsedLeft : 0;
-    const startTop = Number.isFinite(parsedTop) ? parsedTop : 0;
+    const startLeft = resolveStartCoord(selectedElement, 'left');
+    const startTop = resolveStartCoord(selectedElement, 'top');
     const targetPosition =
       selectedElement.styles.position === 'static' ? 'relative' : selectedElement.styles.position;
 
@@ -646,6 +692,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       startTop,
       currentLeft: startLeft,
       currentTop: startTop,
+      clearRight: hasSideAnchorConflict(selectedElement, 'right'),
+      clearBottom: hasSideAnchorConflict(selectedElement, 'bottom'),
     });
   };
 
@@ -1716,9 +1764,10 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             </div>
           ) : (
             <div
-              className="relative flex flex-col items-center shrink-0"
+              className="relative shrink-0"
               style={{
                 width: `${Math.round(effectiveFrameWidthPx * zoomScale)}px`,
+                height: `${Math.round(effectiveFrameHeightPx * zoomScale)}px`,
               }}
             >
               {/* Live Frame Dimensions Pill while dragging */}
@@ -1736,11 +1785,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 data-testid="canvas-frame"
                 style={{
                   width: `${Math.round(effectiveFrameWidthPx)}px`,
-                  height: canvasHeightPx
-                    ? `${canvasHeightPx}px`
-                    : `${Math.max(480, Math.round(stageSize.height - 44))}px`,
+                  height: `${effectiveFrameHeightPx}px`,
                   transform: zoomScale !== 1 ? `scale(${zoomScale})` : undefined,
-                  transformOrigin: 'top center',
+                  transformOrigin: 'top left',
                 }}
                 className="relative min-h-[300px] flex flex-col rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl"
               >
@@ -1933,91 +1980,105 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                           )}
 
                           {/* Floating Element Label, Move Grip & Quick-Action Bar */}
-                          <div
-                            data-testid="floating-quick-actions"
-                            className={`absolute left-0 flex items-center gap-1 whitespace-nowrap z-30 ${
-                              displayRect.top < 36 ? '-bottom-7' : '-top-7'
-                            }`}
-                          >
-                            <span className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-[10.5px] font-mono-tabular font-medium px-2 py-0.5 rounded-md shadow-md">
-                              {selectedElement.tagName} ·{' '}
-                              {dragState?.kind === 'move'
-                                ? `x:${dragState.currentLeft} y:${dragState.currentTop}`
-                                : `${liveW} × ${liveH}${aspectRatioLocked ? ' · Locked' : ''}`}
-                            </span>
-                            <div className="pointer-events-auto inline-flex items-center gap-0.5 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border-strong)] p-0.5 shadow-xl studio-card-highlight">
-                              <button
-                                type="button"
-                                onPointerDown={startMove}
-                                aria-label="Move selected element"
-                                title="Drag to move element freely"
-                                className="inline-flex items-center gap-1 h-6 px-1.5 rounded-md text-[10.5px] font-medium text-[var(--studio-text-strong)] hover:bg-indigo-600 hover:text-white studio-pressable cursor-grab active:cursor-grabbing"
+                          {(() => {
+                            const alignRight =
+                              displayRect.left > Math.max(120, effectiveFrameWidthPx - 290);
+                            const canFitBottom =
+                              displayRect.top + displayRect.height + 34 <=
+                              effectiveFrameHeightPx - 32;
+                            const vClass =
+                              displayRect.top >= 36
+                                ? '-top-7'
+                                : canFitBottom
+                                  ? '-bottom-7'
+                                  : 'top-1.5';
+                            const hClass = alignRight ? 'right-0' : 'left-0';
+                            return (
+                              <div
+                                data-testid="floating-quick-actions"
+                                className={`absolute ${hClass} ${vClass} flex items-center gap-1 whitespace-nowrap z-30`}
                               >
-                                <Move className="w-3 h-3" strokeWidth={1.4} />
-                                Move
-                              </button>
-                              <button
-                                type="button"
-                                onClick={onSelectParent}
-                                aria-label="Select parent element"
-                                title="Select Parent Element"
-                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
-                              >
-                                <CornerLeftUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                <span className="studio-reveal-label">Parent</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => onMoveSibling('up')}
-                                aria-label="Move element up"
-                                title="Move Up (Alt+↑)"
-                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
-                              >
-                                <ArrowUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                <span className="studio-reveal-label">Up</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => onMoveSibling('down')}
-                                aria-label="Move element down"
-                                title="Move Down (Alt+↓)"
-                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
-                              >
-                                <ArrowDown className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                <span className="studio-reveal-label">Down</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={onDuplicateSelected}
-                                aria-label="Floating duplicate element"
-                                title="Duplicate (Ctrl+D)"
-                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
-                              >
-                                <Copy className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                <span className="studio-reveal-label">Duplicate</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={onViewSelectedInCode}
-                                aria-label="View in code editor"
-                                title="View in Code"
-                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-cyan-700 dark:text-cyan-300 hover:bg-[var(--studio-hover)] studio-pressable cursor-pointer"
-                              >
-                                <Code2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                <span className="studio-reveal-label">Code</span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={onRemoveSelected}
-                                aria-label="Floating delete element"
-                                title="Delete (Del)"
-                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-red-600 dark:text-red-400 hover:bg-red-500/20 studio-pressable cursor-pointer"
-                              >
-                                <Trash2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                <span className="studio-reveal-label">Delete</span>
-                              </button>
-                            </div>
-                          </div>
+                                <span className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-[10.5px] font-mono-tabular font-medium px-2 py-0.5 rounded-md shadow-md">
+                                  {selectedElement.tagName} ·{' '}
+                                  {dragState?.kind === 'move'
+                                    ? `x:${dragState.currentLeft} y:${dragState.currentTop}`
+                                    : `${liveW} × ${liveH}${aspectRatioLocked ? ' · Locked' : ''}`}
+                                </span>
+                                <div className="pointer-events-auto inline-flex items-center gap-0.5 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border-strong)] p-0.5 shadow-xl studio-card-highlight">
+                                  <button
+                                    type="button"
+                                    onPointerDown={startMove}
+                                    aria-label="Move selected element"
+                                    title="Drag to move element freely"
+                                    className="inline-flex items-center gap-1 h-6 px-1.5 rounded-md text-[10.5px] font-medium text-[var(--studio-text-strong)] hover:bg-indigo-600 hover:text-white studio-pressable cursor-grab active:cursor-grabbing"
+                                  >
+                                    <Move className="w-3 h-3" strokeWidth={1.4} />
+                                    Move
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={onSelectParent}
+                                    aria-label="Select parent element"
+                                    title="Select Parent Element"
+                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+                                  >
+                                    <CornerLeftUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                    <span className="studio-reveal-label">Parent</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => onMoveSibling('up')}
+                                    aria-label="Move element up"
+                                    title="Move Up (Alt+↑)"
+                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+                                  >
+                                    <ArrowUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                    <span className="studio-reveal-label">Up</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => onMoveSibling('down')}
+                                    aria-label="Move element down"
+                                    title="Move Down (Alt+↓)"
+                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+                                  >
+                                    <ArrowDown className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                    <span className="studio-reveal-label">Down</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={onDuplicateSelected}
+                                    aria-label="Floating duplicate element"
+                                    title="Duplicate (Ctrl+D)"
+                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+                                  >
+                                    <Copy className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                    <span className="studio-reveal-label">Duplicate</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={onViewSelectedInCode}
+                                    aria-label="View in code editor"
+                                    title="View in Code"
+                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-cyan-700 dark:text-cyan-300 hover:bg-[var(--studio-hover)] studio-pressable cursor-pointer"
+                                  >
+                                    <Code2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                    <span className="studio-reveal-label">Code</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={onRemoveSelected}
+                                    aria-label="Floating delete element"
+                                    title="Delete (Del)"
+                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-red-600 dark:text-red-400 hover:bg-red-500/20 studio-pressable cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                    <span className="studio-reveal-label">Delete</span>
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })()}
 
                           {(Object.keys(HANDLE_POSITIONS) as ResizeHandleDir[]).map((dir) => (
                             <button

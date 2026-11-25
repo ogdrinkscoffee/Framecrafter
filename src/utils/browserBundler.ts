@@ -302,7 +302,7 @@ export function buildEsmShImportMap(
     const { pkgName, subpath } = splitPackageSpecifier(spec);
     const ver = parseExactSemver(pkgDeps[pkgName]);
     const pkgPinned = ver ? `${pkgName}@${ver}` : pkgName;
-    map[spec] = `https://esm.sh/${pkgPinned}${subpath}?external=react,react-dom`;
+    map[spec] = `https://esm.sh/${pkgPinned}${subpath}?external=react,react-dom&deps=react@${reactVer},react-dom@${reactDomVer}`;
   }
 
   return map;
@@ -607,6 +607,9 @@ export default { existsSync, readFileSync, writeFileSync, readdirSync, statSync,
 
 const EMPTY_BROWSER_SHIM = `export default {};`;
 const VITE_CLIENT_SHIM = `export function createHotContext() { return { accept() {}, dispose() {}, invalidate() {}, decline() {}, on() {}, off() {}, send() {} }; } export function updateStyle() {} export function removeStyle() {} export default {};`;
+const VIRTUAL_PWA_REGISTER_SHIM = `export function registerSW(_options = {}) { return async function updateSW(_reloadPage) {}; } export default { registerSW };`;
+const VIRTUAL_PWA_REGISTER_REACT_SHIM = `export function useRegisterSW(_options = {}) { const noop = () => {}; const updateServiceWorker = async () => {}; return { offlineReady: [false, noop], needRefresh: [false, noop], updateServiceWorker }; } export function registerSW(_options = {}) { return async function updateSW(_reloadPage) {}; } export default { useRegisterSW, registerSW };`;
+const VIRTUAL_PWA_INFO_SHIM = `export const pwaInfo = undefined; export default pwaInfo;`;
 
 const NODE_SHIMS: Record<string, string> = {
   crypto: NODE_CRYPTO_SHIM,
@@ -695,6 +698,13 @@ const NODE_SHIMS: Record<string, string> = {
   'node:timers/promises': EMPTY_BROWSER_SHIM,
   'vite/client': VITE_CLIENT_SHIM,
   '@vite/env': VITE_CLIENT_SHIM,
+  'virtual:pwa-register': VIRTUAL_PWA_REGISTER_SHIM,
+  'virtual:pwa-register/react': VIRTUAL_PWA_REGISTER_REACT_SHIM,
+  'virtual:pwa-register/vue': VIRTUAL_PWA_REGISTER_REACT_SHIM,
+  'virtual:pwa-register/svelte': VIRTUAL_PWA_REGISTER_REACT_SHIM,
+  'virtual:pwa-register/solid': VIRTUAL_PWA_REGISTER_REACT_SHIM,
+  'virtual:pwa-register/preact': VIRTUAL_PWA_REGISTER_REACT_SHIM,
+  'virtual:pwa-info': VIRTUAL_PWA_INFO_SHIM,
 };
 
 function collectEntryModules(
@@ -1175,7 +1185,9 @@ export default new Proxy(__stylesMap, { get(t, p) { return typeof p === 'string'
       target: ['es2020'],
       jsx: 'automatic',
       define: {
+        'process.env': '{"NODE_ENV":"development"}',
         'process.env.NODE_ENV': '"development"',
+        'import.meta.env': '{"DEV":true,"PROD":false,"MODE":"development","BASE_URL":"/"}',
         'import.meta.env.DEV': 'true',
         'import.meta.env.PROD': 'false',
         'import.meta.env.MODE': '"development"',

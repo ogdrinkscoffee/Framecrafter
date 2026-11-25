@@ -194,6 +194,13 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     var rMidY = r.top + r.height / 2;
     var snapXPos = null;
     var snapYPos = null;
+    var parentRect = el.parentElement.getBoundingClientRect();
+    if (parentRect.width > 0 && Math.abs(rMidX - (parentRect.left + parentRect.width / 2)) <= 4) {
+      snapXPos = parentRect.left + parentRect.width / 2;
+    }
+    if (parentRect.height > 0 && Math.abs(rMidY - (parentRect.top + parentRect.height / 2)) <= 4) {
+      snapYPos = parentRect.top + parentRect.height / 2;
+    }
     var siblings = el.parentElement.children;
     for (var i = 0; i < siblings.length; i++) {
       var sib = siblings[i];
@@ -334,7 +341,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       var index = 1;
       var sib = cur.previousElementSibling;
       while (sib) {
-        if (sib.tagName === cur.tagName) index++;
+        if (!isInternalEl(sib) && sib.tagName === cur.tagName) index++;
         sib = sib.previousElementSibling;
       }
       parts.unshift(tag + ':nth-of-type(' + index + ')');
@@ -415,6 +422,23 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
   }
 
+  function resolveOffsetCoord(el, axis, computed) {
+    var inlineVal = el.style[axis];
+    if (inlineVal && inlineVal !== 'auto') {
+      var parsedInline = parseFloat(inlineVal);
+      if (Number.isFinite(parsedInline)) return Math.round(parsedInline);
+    }
+    var computedVal = computed[axis];
+    if (computedVal && computedVal !== 'auto') {
+      var parsedComp = parseFloat(computedVal);
+      if (Number.isFinite(parsedComp)) return Math.round(parsedComp);
+    }
+    if (computed.position === 'absolute' || computed.position === 'fixed') {
+      return Math.round(axis === 'left' ? el.offsetLeft : el.offsetTop);
+    }
+    return 0;
+  }
+
   function getElementPayload(el) {
     var rect = el.getBoundingClientRect();
     var computed = window.getComputedStyle(el);
@@ -447,6 +471,8 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
         width: rect.width,
         height: rect.height
       },
+      offsetLeft: resolveOffsetCoord(el, 'left', computed),
+      offsetTop: resolveOffsetCoord(el, 'top', computed),
       boxModel: {
         margin: {
           top: parsePxFloat(computed.marginTop),
@@ -487,10 +513,18 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
         position: computed.position,
         top: el.style.top || 'auto',
         left: el.style.left || 'auto',
+        right: el.style.right || computed.right,
+        bottom: el.style.bottom || computed.bottom,
         zIndex: el.style.zIndex || (computed.zIndex === 'auto' ? '0' : computed.zIndex),
         display: computed.display,
         flexDirection: computed.flexDirection,
+        justifyContent: el.style.justifyContent || computed.justifyContent || 'normal',
+        alignItems: el.style.alignItems || computed.alignItems || 'normal',
+        flexWrap: el.style.flexWrap || computed.flexWrap || 'nowrap',
+        gridTemplateColumns: el.style.gridTemplateColumns || (computed.gridTemplateColumns === 'none' ? '' : computed.gridTemplateColumns),
         gap: computed.gap,
+        maxWidth: el.style.maxWidth || (computed.maxWidth === 'none' ? 'none' : computed.maxWidth),
+        overflow: el.style.overflow || computed.overflow || 'visible',
         objectFit: el.style.objectFit || computed.objectFit || 'fill'
       },
       inlineStyles: parseInlineStyle(el)
@@ -613,14 +647,17 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     var target = resolveEditableTarget(e.target);
     if (!target || isInternalEl(target) || target === document.body) return;
     var computed = window.getComputedStyle(target);
-    var parsedLeft = parseFloat(target.style.left || computed.left);
-    var parsedTop = parseFloat(target.style.top || computed.top);
+    var startLeft = resolveOffsetCoord(target, 'left', computed);
+    var startTop = resolveOffsetCoord(target, 'top', computed);
+    var isOutOfFlow = computed.position === 'absolute' || computed.position === 'fixed';
     moveDrag = {
       el: target,
       startX: e.clientX,
       startY: e.clientY,
-      startLeft: Number.isFinite(parsedLeft) ? parsedLeft : 0,
-      startTop: Number.isFinite(parsedTop) ? parsedTop : 0,
+      startLeft: startLeft,
+      startTop: startTop,
+      clearRight: isOutOfFlow && (target.style.right && target.style.right !== 'auto' || computed.right !== 'auto'),
+      clearBottom: isOutOfFlow && (target.style.bottom && target.style.bottom !== 'auto' || computed.bottom !== 'auto'),
       targetPosition: computed.position === 'static' ? 'relative' : computed.position,
       dragging: false
     };
@@ -639,6 +676,8 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       if (window.getComputedStyle(moveDrag.el).position === 'static') {
         moveDrag.el.style.position = moveDrag.targetPosition;
       }
+      if (moveDrag.clearRight) moveDrag.el.style.right = 'auto';
+      if (moveDrag.clearBottom) moveDrag.el.style.bottom = 'auto';
     }
     var nextLeft = Math.round(moveDrag.startLeft + dx);
     var nextTop = Math.round(moveDrag.startTop + dy);
@@ -659,14 +698,17 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       if (badge) badge.style.display = 'none';
       suppressNextClick = true;
       window.setTimeout(function() { suppressNextClick = false; }, 80);
+      var committedStyles = {
+        position: drag.el.style.position || drag.targetPosition,
+        left: drag.el.style.left,
+        top: drag.el.style.top
+      };
+      if (drag.clearRight) committedStyles.right = 'auto';
+      if (drag.clearBottom) committedStyles.bottom = 'auto';
       postToParent('POSITION_COMMITTED', {
         veId: drag.el.getAttribute('data-ve-id') || null,
         runtimeId: getRuntimeId(drag.el),
-        styles: {
-          position: drag.el.style.position || drag.targetPosition,
-          left: drag.el.style.left,
-          top: drag.el.style.top
-        },
+        styles: committedStyles,
         element: getElementPayload(drag.el)
       });
     }

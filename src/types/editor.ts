@@ -99,10 +99,18 @@ export interface ElementStyleSnapshot {
   position: string;
   top: string;
   left: string;
+  right?: string;
+  bottom?: string;
   zIndex: string;
   display: string;
   flexDirection: string;
+  justifyContent?: string;
+  alignItems?: string;
+  flexWrap?: string;
+  gridTemplateColumns?: string;
   gap: string;
+  maxWidth?: string;
+  overflow?: string;
   objectFit?: string;
 }
 
@@ -130,6 +138,8 @@ export interface SelectedElementInfo {
   isTextEditable: boolean;
   isHidden: boolean;
   rect: ElementRect;
+  offsetLeft?: number;
+  offsetTop?: number;
   boxModel?: BoxModelMetrics;
   styles: ElementStyleSnapshot;
   inlineStyles: Record<string, string>;

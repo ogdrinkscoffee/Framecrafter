@@ -47,7 +47,12 @@ import {
 } from './utils/fontLibrary';
 import {
   computeFilesFingerprint,
+  type GitHubAuthStatusResponse,
+  type GitHubBranchesResponse,
   type GitHubConnectionConfig,
+  type GitHubReposResponse,
+  type GitHubRepoSummary,
+  type GitHubUserProfile,
   mergeUpstreamFilesWithWorkspace,
 } from './utils/githubSync';
 import {
@@ -125,6 +130,35 @@ const CONTAINER_TAGS = new Set([
   'ol',
 ]);
 
+function encodeBase64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function generatePkceCodeVerifier(): string {
+  const randomBytes = new Uint8Array(48);
+  window.crypto.getRandomValues(randomBytes);
+  return encodeBase64Url(randomBytes);
+}
+
+async function computePkceCodeChallengeS256(verifier: string): Promise<string> {
+  const encoded = new TextEncoder().encode(verifier);
+  const digest = await window.crypto.subtle.digest('SHA-256', encoded);
+  return encodeBase64Url(new Uint8Array(digest));
+}
+
+function resolveOriginFromUrl(rawUrl?: string | null): string {
+  if (!rawUrl) return '';
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return '';
+  }
+}
+
 export default function App() {
   const defaultTemplate = SAMPLE_TEMPLATES[0];
   const savedWorkspace = useMemo(() => loadWorkspaceFromStorage(), []);
@@ -195,7 +229,7 @@ export default function App() {
     null
   );
 
-  // GitHub Sync state (token kept strictly in component state memory, never persisted)
+  // GitHub Sync & OAuth state (tokens kept strictly in component state memory, never persisted)
   const [githubOpen, setGithubOpen] = useState(false);
   const [githubCommitModalOpen, setGithubCommitModalOpen] = useState(false);
   const [githubConnection, setGithubConnection] = useState<GitHubConnectionConfig>({
@@ -208,10 +242,25 @@ export default function App() {
     lastCommitUrl: undefined,
   });
   const [githubToken, setGithubToken] = useState('');
+  const [githubSessionToken, setGithubSessionToken] = useState('');
+  const [githubBrowseUsername, setGithubBrowseUsername] = useState('');
+  const [githubUser, setGithubUser] = useState<GitHubUserProfile | null>(null);
+  const [githubRepos, setGithubRepos] = useState<GitHubRepoSummary[]>([]);
+  const [githubReposLoading, setGithubReposLoading] = useState(false);
+  const [githubReposError, setGithubReposError] = useState<string | null>(null);
+  const [githubConnecting, setGithubConnecting] = useState(false);
+  const [githubOAuthConfigured, setGithubOAuthConfigured] = useState<boolean | null>(null);
+  const [githubCallbackUrl, setGithubCallbackUrl] = useState('');
   const [githubBusyAction, setGithubBusyAction] = useState<'pull' | 'push' | null>(null);
   const [githubStatusError, setGithubStatusError] = useState<string | null>(null);
   const [githubStatusMessage, setGithubStatusMessage] = useState<string | null>(null);
   const [githubRequiresAuthPrompt, setGithubRequiresAuthPrompt] = useState(false);
+
+  const oauthPopupRef = useRef<Window | null>(null);
+  const oauthNonceRef = useRef<string>('');
+  const oauthPkceVerifierRef = useRef<string>('');
+  const oauthCallbackOriginRef = useRef<string>('');
+  const oauthPollTimerRef = useRef<number | null>(null);
 
   const [autoSaveStatus, setAutoSaveStatus] = useState<AutoSaveStatus>({
     enabled: true,
@@ -2220,16 +2269,409 @@ export default function App() {
     [files, entryHtmlPath, postToIframe, showToast]
   );
 
-  // Pull & Push integration with GitHub repository URL (no API key required for public pulls)
+  const handleBrowseGitHubUsername = useCallback(
+    async (username: string) => {
+      const clean = username.trim().replace(/^@+/, '');
+      if (!clean) {
+        setGithubReposError('Enter a GitHub username to load public repositories.');
+        return;
+      }
+      setGithubReposLoading(true);
+      setGithubReposError(null);
+      try {
+        const headers: Record<string, string> = {};
+        if (githubSessionToken) {
+          headers.Authorization = `Bearer ${githubSessionToken}`;
+        } else if (githubToken.trim()) {
+          headers['X-GitHub-Token'] = githubToken.trim();
+        }
+        const res = await fetch(`/api/github/users/${encodeURIComponent(clean)}/repos`, {
+          headers,
+        });
+        const data = (await res.json()) as GitHubReposResponse;
+        if (!res.ok || !data.ok) {
+          setGithubReposError(data.error || `Could not load repositories for @${clean}.`);
+          return;
+        }
+        setGithubBrowseUsername(clean);
+        if (data.user) {
+          setGithubUser(data.user);
+        }
+        setGithubRepos(Array.isArray(data.repos) ? data.repos : []);
+      } catch (err) {
+        setGithubReposError(
+          err instanceof Error ? err.message : 'Network error browsing GitHub repositories.'
+        );
+      } finally {
+        setGithubReposLoading(false);
+      }
+    },
+    [githubSessionToken, githubToken]
+  );
+
+  const handleRefreshGitHubRepos = useCallback(
+    async (overridePatToken?: string, overrideSessionToken?: string) => {
+      const effectiveSession = overrideSessionToken ?? githubSessionToken;
+      const effectivePat = (overridePatToken ?? githubToken).trim();
+      if (!effectiveSession && !effectivePat) {
+        if (githubBrowseUsername) {
+          await handleBrowseGitHubUsername(githubBrowseUsername);
+        }
+        return;
+      }
+
+      setGithubReposLoading(true);
+      setGithubReposError(null);
+      try {
+        const headers: Record<string, string> = {};
+        if (effectiveSession) {
+          headers.Authorization = `Bearer ${effectiveSession}`;
+        } else if (effectivePat) {
+          headers['X-GitHub-Token'] = effectivePat;
+        }
+        const res = await fetch('/api/github/repos', { headers });
+        const data = (await res.json()) as GitHubReposResponse;
+        if (!res.ok || !data.ok) {
+          if (res.status === 401 && effectiveSession) {
+            setGithubSessionToken('');
+            setGithubUser(null);
+            setGithubRepos([]);
+          }
+          setGithubReposError(data.error || 'Could not load your GitHub repositories.');
+          return;
+        }
+        setGithubBrowseUsername('');
+        if (data.user) {
+          setGithubUser(data.user);
+        }
+        setGithubRepos(Array.isArray(data.repos) ? data.repos : []);
+      } catch (err) {
+        setGithubReposError(
+          err instanceof Error ? err.message : 'Network error loading GitHub repositories.'
+        );
+      } finally {
+        setGithubReposLoading(false);
+      }
+    },
+    [githubBrowseUsername, githubSessionToken, githubToken, handleBrowseGitHubUsername]
+  );
+
+  const handleFetchRepoBranches = useCallback(
+    async (owner: string, repo: string): Promise<string[]> => {
+      try {
+        const headers: Record<string, string> = {};
+        if (githubSessionToken) {
+          headers.Authorization = `Bearer ${githubSessionToken}`;
+        } else if (githubToken.trim()) {
+          headers['X-GitHub-Token'] = githubToken.trim();
+        }
+        const res = await fetch(
+          `/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
+          { headers }
+        );
+        const data = (await res.json()) as GitHubBranchesResponse;
+        return res.ok && data.ok && Array.isArray(data.branches) ? data.branches : [];
+      } catch {
+        return [];
+      }
+    },
+    [githubSessionToken, githubToken]
+  );
+
+  useEffect(() => {
+    let active = true;
+    const checkStatus = async () => {
+      try {
+        const originParam = encodeURIComponent(window.location.origin);
+        const res = await fetch(`/api/auth/github/status?origin=${originParam}`);
+        if (!res.ok || !active) return;
+        const data = (await res.json()) as GitHubAuthStatusResponse & {
+          callbackOrigin?: string;
+        };
+        if (!active) return;
+        setGithubOAuthConfigured(Boolean(data.configured));
+        const resolvedCallback =
+          data.callbackUrl || `${window.location.origin}/auth/github/callback`;
+        setGithubCallbackUrl(resolvedCallback);
+        oauthCallbackOriginRef.current =
+          data.callbackOrigin || resolveOriginFromUrl(resolvedCallback) || window.location.origin;
+      } catch {
+        if (active) {
+          setGithubCallbackUrl(`${window.location.origin}/auth/github/callback`);
+          oauthCallbackOriginRef.current = window.location.origin;
+        }
+      }
+    };
+    void checkStatus();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const clearOAuthHandshake = useCallback((keepConnecting = false) => {
+    if (oauthPollTimerRef.current !== null) {
+      window.clearInterval(oauthPollTimerRef.current);
+      oauthPollTimerRef.current = null;
+    }
+    oauthPopupRef.current = null;
+    oauthNonceRef.current = '';
+    oauthPkceVerifierRef.current = '';
+    if (!keepConnecting) {
+      setGithubConnecting(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (oauthPollTimerRef.current !== null) {
+        window.clearInterval(oauthPollTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const completePkceCodeExchange = async (
+      payload: {
+        code: string;
+        exchangeToken?: string;
+        state?: string;
+        redirectUri?: string;
+      },
+      codeVerifier: string
+    ) => {
+      try {
+        const exchangeRes = await fetch('/api/auth/github/exchange', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: payload.code,
+            codeVerifier,
+            ...(payload.exchangeToken ? { exchangeToken: payload.exchangeToken } : {}),
+            ...(payload.state ? { state: payload.state } : {}),
+            ...(payload.redirectUri ? { redirectUri: payload.redirectUri } : {}),
+          }),
+        });
+        const exchangeData = (await exchangeRes.json()) as {
+          ok?: boolean;
+          sessionToken?: string;
+          user?: GitHubUserProfile;
+          error?: string;
+        };
+        if (!exchangeRes.ok || !exchangeData.ok || !exchangeData.sessionToken || !exchangeData.user) {
+          const errMsg =
+            exchangeData.error || 'Failed exchanging GitHub PKCE authorization code.';
+          setGithubReposError(errMsg);
+          setGithubStatusError(errMsg);
+          return;
+        }
+
+        setGithubSessionToken(exchangeData.sessionToken);
+        setGithubUser(exchangeData.user);
+        setGithubRequiresAuthPrompt(false);
+        setGithubStatusError(null);
+        setGithubReposError(null);
+        setGithubStatusMessage(`Connected to GitHub as @${exchangeData.user.login}`);
+        showToast(`Connected to GitHub as @${exchangeData.user.login}`);
+        void handleRefreshGitHubRepos(undefined, exchangeData.sessionToken);
+      } catch (err) {
+        const errMsg =
+          err instanceof Error ? err.message : 'Unable to exchange GitHub authorization code.';
+        setGithubReposError(errMsg);
+        setGithubStatusError(errMsg);
+      } finally {
+        setGithubConnecting(false);
+      }
+    };
+
+    const handleOAuthMessage = (event: MessageEvent) => {
+      // Strictly validate origin (same-origin OR configured external callback origin),
+      // popup window source, and one-time client handshake nonce
+      const externalEnvUrl = (
+        import.meta as unknown as { env?: Record<string, string | undefined> }
+      ).env?.VITE_GITHUB_OAUTH_CALLBACK_URL;
+      const allowedCallbackOrigin =
+        oauthCallbackOriginRef.current || resolveOriginFromUrl(externalEnvUrl);
+      const isAllowedOrigin =
+        event.origin === window.location.origin ||
+        (Boolean(allowedCallbackOrigin) && event.origin === allowedCallbackOrigin);
+      if (!isAllowedOrigin) return;
+      if (oauthPopupRef.current && event.source !== oauthPopupRef.current) return;
+
+      const data = event.data as
+        | {
+            type?: string;
+            code?: string;
+            exchangeToken?: string;
+            state?: string;
+            redirectUri?: string;
+            sessionToken?: string;
+            user?: GitHubUserProfile;
+            error?: string;
+            nonce?: string;
+          }
+        | undefined;
+      if (!data || typeof data.type !== 'string') return;
+      if (!oauthNonceRef.current || data.nonce !== oauthNonceRef.current) return;
+
+      if (data.type === 'GITHUB_OAUTH_CODE' && data.code) {
+        const verifier = oauthPkceVerifierRef.current;
+        clearOAuthHandshake(true);
+        if (!verifier) {
+          setGithubConnecting(false);
+          const msg = 'Missing PKCE verifier for GitHub authorization handshake.';
+          setGithubReposError(msg);
+          setGithubStatusError(msg);
+          return;
+        }
+        void completePkceCodeExchange(
+          {
+            code: data.code,
+            exchangeToken: data.exchangeToken,
+            state: data.state,
+            redirectUri: data.redirectUri,
+          },
+          verifier
+        );
+      } else if (data.type === 'GITHUB_OAUTH_SUCCESS' && data.sessionToken && data.user) {
+        clearOAuthHandshake();
+        setGithubSessionToken(data.sessionToken);
+        setGithubUser(data.user);
+        setGithubRequiresAuthPrompt(false);
+        setGithubStatusError(null);
+        setGithubReposError(null);
+        setGithubStatusMessage(`Connected to GitHub as @${data.user.login}`);
+        showToast(`Connected to GitHub as @${data.user.login}`);
+        void handleRefreshGitHubRepos(undefined, data.sessionToken);
+      } else if (data.type === 'GITHUB_OAUTH_ERROR') {
+        clearOAuthHandshake();
+        const errMsg = data.error || 'GitHub authorization was not completed.';
+        setGithubReposError(errMsg);
+        setGithubStatusError(errMsg);
+      }
+    };
+
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, [clearOAuthHandshake, handleRefreshGitHubRepos, showToast]);
+
+  const handleConnectGitHub = useCallback(async () => {
+    setGithubReposError(null);
+    setGithubStatusError(null);
+    setGithubConnecting(true);
+    try {
+      const nonceBytes = new Uint8Array(24);
+      window.crypto.getRandomValues(nonceBytes);
+      const clientNonce = Array.from(nonceBytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      const codeVerifier = generatePkceCodeVerifier();
+      const codeChallenge = await computePkceCodeChallengeS256(codeVerifier);
+
+      oauthNonceRef.current = clientNonce;
+      oauthPkceVerifierRef.current = codeVerifier;
+
+      const originParam = encodeURIComponent(window.location.origin);
+      const nonceParam = encodeURIComponent(clientNonce);
+      const challengeParam = encodeURIComponent(codeChallenge);
+      const res = await fetch(
+        `/api/auth/github/url?origin=${originParam}&nonce=${nonceParam}&code_challenge=${challengeParam}&code_challenge_method=S256`
+      );
+      const data = (await res.json()) as {
+        ok?: boolean;
+        configured?: boolean;
+        callbackUrl?: string;
+        callbackOrigin?: string;
+        url?: string;
+        error?: string;
+      };
+      if (typeof data.configured === 'boolean') {
+        setGithubOAuthConfigured(data.configured);
+      }
+      if (data.callbackUrl) {
+        setGithubCallbackUrl(data.callbackUrl);
+      }
+      const externalEnvUrl = (
+        import.meta as unknown as { env?: Record<string, string | undefined> }
+      ).env?.VITE_GITHUB_OAUTH_CALLBACK_URL;
+      oauthCallbackOriginRef.current =
+        data.callbackOrigin ||
+        resolveOriginFromUrl(data.callbackUrl) ||
+        resolveOriginFromUrl(externalEnvUrl) ||
+        window.location.origin;
+
+      if (!res.ok || !data.url) {
+        clearOAuthHandshake();
+        setGithubReposError(
+          data.error ||
+            'GitHub OAuth is not configured on the server yet. Add GITHUB_CLIENT_ID in Secrets (secret optional with PKCE) or use a Personal Access Token.'
+        );
+        return;
+      }
+
+      const authWindow = window.open(
+        data.url,
+        'framecraft_github_oauth',
+        'width=620,height=720'
+      );
+      if (!authWindow) {
+        clearOAuthHandshake();
+        setGithubReposError(
+          'Popup was blocked by the browser. Allow popups for this site and click Connect GitHub again.'
+        );
+        return;
+      }
+
+      oauthPopupRef.current = authWindow;
+      if (oauthPollTimerRef.current !== null) {
+        window.clearInterval(oauthPollTimerRef.current);
+      }
+      oauthPollTimerRef.current = window.setInterval(() => {
+        if (authWindow.closed) {
+          clearOAuthHandshake();
+        }
+      }, 600);
+    } catch (err) {
+      clearOAuthHandshake();
+      setGithubReposError(
+        err instanceof Error ? err.message : 'Unable to start GitHub connection.'
+      );
+    }
+  }, [clearOAuthHandshake]);
+
+  const handleDisconnectGitHub = useCallback(async () => {
+    const tokenToRevoke = githubSessionToken;
+    setGithubSessionToken('');
+    setGithubBrowseUsername('');
+    setGithubUser(null);
+    setGithubRepos([]);
+    setGithubReposError(null);
+    setGithubToken('');
+    setGithubStatusMessage(null);
+    if (tokenToRevoke) {
+      try {
+        await fetch('/api/auth/github/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${tokenToRevoke}` },
+        });
+      } catch {
+        // Ignore network errors during local logout
+      }
+    }
+    showToast('Disconnected GitHub account');
+  }, [githubSessionToken, showToast]);
+
+  // Pull & Push integration with GitHub (supports OAuth session or repo URL)
   const handlePullFromGitHub = useCallback(
     async (repoUrl: string, branch: string, token: string): Promise<boolean> => {
       setGithubBusyAction('pull');
       setGithubStatusError(null);
       setGithubStatusMessage(null);
       try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (githubSessionToken) {
+          headers.Authorization = `Bearer ${githubSessionToken}`;
+        }
         const res = await fetch('/api/github/pull', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ repoUrl, branch, token }),
         });
         const data = (await res.json()) as {
@@ -2324,7 +2766,7 @@ export default function App() {
         setGithubBusyAction(null);
       }
     },
-    [editorMode, files, githubConnection.repoFullName, rebuildPreview, showToast]
+    [editorMode, files, githubConnection.repoFullName, githubSessionToken, rebuildPreview, showToast]
   );
 
   const handlePushToGitHub = useCallback(
@@ -2341,9 +2783,13 @@ export default function App() {
         setGithubStatusMessage(null);
       }
       try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (githubSessionToken) {
+          headers.Authorization = `Bearer ${githubSessionToken}`;
+        }
         const res = await fetch('/api/github/push', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             repoUrl,
             branch,
@@ -2406,7 +2852,20 @@ export default function App() {
         }
       }
     },
-    [files, showToast]
+    [files, githubSessionToken, showToast]
+  );
+
+  const handleSwitchGithubBranch = useCallback(
+    (nextBranch: string) => {
+      const trimmed = nextBranch.trim();
+      if (!trimmed) return;
+      setGithubConnection((prev) => {
+        if (prev.branch === trimmed) return prev;
+        return { ...prev, branch: trimmed };
+      });
+      setGithubStatusError(null);
+    },
+    []
   );
 
   const handleToggleGithubAutoSync = useCallback(
@@ -2417,20 +2876,22 @@ export default function App() {
         branch: branch || prev.branch,
         autoSync: enabled,
       }));
-      if (enabled && !githubToken.trim()) {
+      const hasAuth = Boolean(githubSessionToken || githubToken.trim());
+      if (enabled && !hasAuth) {
         setGithubRequiresAuthPrompt(true);
         setGithubStatusError(
-          'Enter a GitHub push token in the optional section below so instant auto-sync can push commits.'
+          'Connect your GitHub account or enter a GitHub push token so instant auto-sync can push commits.'
         );
       } else {
         setGithubStatusError(null);
       }
     },
-    [githubToken]
+    [githubSessionToken, githubToken]
   );
 
   useEffect(() => {
-    if (!githubConnection.autoSync || !githubConnection.repoUrl.trim() || !githubToken.trim()) {
+    const hasAuth = Boolean(githubSessionToken || githubToken.trim());
+    if (!githubConnection.autoSync || !githubConnection.repoUrl.trim() || !hasAuth) {
       return;
     }
     const nextFp = computeFilesFingerprint(files);
@@ -2461,6 +2922,7 @@ export default function App() {
     githubConnection.autoSync,
     githubConnection.repoUrl,
     githubConnection.branch,
+    githubSessionToken,
     githubToken,
     handlePushToGitHub,
   ]);
@@ -2542,9 +3004,24 @@ export default function App() {
           onResumeWorkspace={() => setShowStartHub(false)}
           onSelectTemplate={handleLoadTemplate}
           onUploadFiles={(list) => void handleUploadFiles(list)}
-          onPullFromGitHub={(repoUrl, branch) => handlePullFromGitHub(repoUrl, branch, '')}
+          onPullFromGitHub={(repoUrl, branch) => handlePullFromGitHub(repoUrl, branch, githubToken)}
           githubBusy={githubBusyAction === 'pull'}
           githubError={githubStatusError}
+          githubUser={githubUser}
+          githubAccountReadOnly={Boolean(githubUser && !githubSessionToken && !githubToken.trim())}
+          githubRepos={githubRepos}
+          githubReposLoading={githubReposLoading}
+          githubReposError={githubReposError}
+          githubConnecting={githubConnecting}
+          githubOAuthConfigured={githubOAuthConfigured}
+          githubCallbackUrl={githubCallbackUrl}
+          githubToken={githubToken}
+          onChangeGithubToken={setGithubToken}
+          onConnectGitHub={handleConnectGitHub}
+          onDisconnectGitHub={handleDisconnectGitHub}
+          onRefreshGitHubRepos={(overridePat) => handleRefreshGitHubRepos(overridePat)}
+          onBrowseGitHubUsername={handleBrowseGitHubUsername}
+          onFetchRepoBranches={handleFetchRepoBranches}
           onOpenShortcuts={() => setShortcutsModalOpen(true)}
         />
       ) : (
@@ -2588,6 +3065,20 @@ export default function App() {
               await handlePushToGitHub(repoUrl, branch, commitMessage, token, false);
             }}
             onToggleGithubAutoSync={handleToggleGithubAutoSync}
+            githubUser={githubUser}
+            githubAccountReadOnly={Boolean(githubUser && !githubSessionToken && !githubToken.trim())}
+            githubRepos={githubRepos}
+            githubReposLoading={githubReposLoading}
+            githubReposError={githubReposError}
+            githubConnecting={githubConnecting}
+            githubOAuthConfigured={githubOAuthConfigured}
+            githubCallbackUrl={githubCallbackUrl}
+            onConnectGitHub={handleConnectGitHub}
+            onDisconnectGitHub={handleDisconnectGitHub}
+            onRefreshGitHubRepos={(overridePat) => handleRefreshGitHubRepos(overridePat)}
+            onBrowseGitHubUsername={handleBrowseGitHubUsername}
+            onFetchRepoBranches={handleFetchRepoBranches}
+            onSwitchBranch={handleSwitchGithubBranch}
           />
 
           <div className="flex-1 min-h-0 flex relative z-10">

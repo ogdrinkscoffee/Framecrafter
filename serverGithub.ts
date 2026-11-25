@@ -1,12 +1,18 @@
 import JSZip from 'jszip';
 import {
   encodeProjectFileForGitHubBlob,
+  type GitHubBranchesResponse,
   type GitHubPullResponse,
   type GitHubPushResponse,
+  type GitHubRepoSummary,
+  type GitHubReposResponse,
+  type GitHubUserProfile,
   inferBinaryMimeFromPath,
   parseGitHubRepoUrl,
   shouldIgnoreGitHubTreePath,
+  VALID_GITHUB_SLUG_RE,
 } from './src/utils/githubSync.ts';
+import { sanitizeHttpUrl } from './serverOAuth.ts';
 import { normalizeRelativePath } from './src/utils/projectBundler.ts';
 import type { ProjectFile } from './src/types/editor.ts';
 
@@ -55,6 +61,337 @@ async function fetchGitHubJson<T>(
   };
 }
 
+export async function exchangeGitHubOAuthCode(params: {
+  code: string;
+  redirectUri: string;
+  clientId: string;
+  clientSecret?: string;
+  codeVerifier?: string;
+}): Promise<{ ok: true; accessToken: string } | { ok: false; error: string }> {
+  const bodyPayload: Record<string, string> = {
+    client_id: params.clientId,
+    code: params.code,
+    redirect_uri: params.redirectUri,
+  };
+  if (params.clientSecret?.trim()) {
+    bodyPayload.client_secret = params.clientSecret.trim();
+  }
+  if (params.codeVerifier?.trim()) {
+    bodyPayload.code_verifier = params.codeVerifier.trim();
+  }
+
+  const res = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'Framecraft-Studio',
+    },
+    body: JSON.stringify(bodyPayload),
+  });
+
+  const payload = (await res.json().catch(() => null)) as {
+    access_token?: string;
+    error?: string;
+    error_description?: string;
+  } | null;
+
+  if (!res.ok || !payload?.access_token) {
+    return {
+      ok: false,
+      error:
+        payload?.error_description ||
+        payload?.error ||
+        `GitHub OAuth token exchange failed (HTTP ${res.status}).`,
+    };
+  }
+
+  return { ok: true, accessToken: payload.access_token };
+}
+
+export async function fetchGitHubAuthenticatedUser(
+  accessToken: string
+): Promise<{ ok: true; user: GitHubUserProfile } | { ok: false; error: string }> {
+  const userRes = await fetchGitHubJson<{
+    login?: string;
+    name?: string | null;
+    avatar_url?: string | null;
+    html_url?: string;
+  }>('/user', accessToken);
+
+  if (userRes.status >= 400 || !userRes.data?.login) {
+    return {
+      ok: false,
+      error: userRes.message || `Failed fetching GitHub profile (HTTP ${userRes.status}).`,
+    };
+  }
+
+  return {
+    ok: true,
+    user: {
+      login: userRes.data.login,
+      name: userRes.data.name ?? null,
+      avatarUrl: sanitizeHttpUrl(userRes.data.avatar_url),
+      htmlUrl: sanitizeHttpUrl(userRes.data.html_url) || `https://github.com/${encodeURIComponent(userRes.data.login)}`,
+    },
+  };
+}
+
+export async function listAuthenticatedGitHubRepos(
+  accessToken: string,
+  query?: string
+): Promise<GitHubReposResponse> {
+  const cleanToken = accessToken.trim();
+  if (!cleanToken) {
+    return { ok: false, requiresAuth: true, error: 'Connect your GitHub account first.' };
+  }
+
+  const [userProfileRes, reposRes] = await Promise.all([
+    fetchGitHubAuthenticatedUser(cleanToken),
+    fetchGitHubJson<
+      Array<{
+        id: number;
+        name: string;
+        full_name: string;
+        owner?: { login?: string };
+        private: boolean;
+        default_branch?: string;
+        description?: string | null;
+        html_url: string;
+        updated_at: string;
+        language?: string | null;
+        permissions?: { push?: boolean };
+      }>
+    >(
+      '/user/repos?sort=updated&direction=desc&per_page=100&affiliation=owner,collaborator,organization_member',
+      cleanToken
+    ),
+  ]);
+
+  if (reposRes.status === 401 || reposRes.status === 403) {
+    return {
+      ok: false,
+      requiresAuth: true,
+      error: reposRes.message || 'GitHub authorization expired or lacks repository access.',
+    };
+  }
+
+  if (reposRes.status >= 400 || !Array.isArray(reposRes.data)) {
+    return {
+      ok: false,
+      error: reposRes.message || `Failed listing GitHub repositories (HTTP ${reposRes.status}).`,
+    };
+  }
+
+  const q = query?.trim().toLowerCase() ?? '';
+  const mapped: GitHubRepoSummary[] = reposRes.data
+    .map((repo) => ({
+      id: repo.id,
+      name: repo.name,
+      fullName: repo.full_name,
+      owner: repo.owner?.login || repo.full_name.split('/')[0] || '',
+      private: Boolean(repo.private),
+      defaultBranch: repo.default_branch || 'main',
+      description: repo.description ?? null,
+      htmlUrl: repo.html_url,
+      updatedAt: repo.updated_at,
+      language: repo.language ?? null,
+      canPush: repo.permissions?.push ?? true,
+    }))
+    .filter((repo) => {
+      if (!q) return true;
+      return (
+        repo.fullName.toLowerCase().includes(q) ||
+        (repo.description || '').toLowerCase().includes(q) ||
+        (repo.language || '').toLowerCase().includes(q)
+      );
+    });
+
+  return {
+    ok: true,
+    ...(userProfileRes.ok ? { user: userProfileRes.user } : {}),
+    repos: mapped,
+  };
+}
+
+const GITHUB_USERNAME_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+
+export async function listPublicGitHubReposByUsername(
+  username: string,
+  query?: string,
+  token?: string
+): Promise<GitHubReposResponse> {
+  const cleanUsername = username.trim().replace(/^@+/, '');
+  if (!GITHUB_USERNAME_RE.test(cleanUsername)) {
+    return {
+      ok: false,
+      error: 'Enter a valid GitHub username (letters, numbers, or single hyphens).',
+    };
+  }
+
+  const userToken = token?.trim() || undefined;
+  let authToken = userToken || process.env.GITHUB_TOKEN?.trim() || undefined;
+
+  let [profileRes, reposRes] = await Promise.all([
+    fetchGitHubJson<{
+      login?: string;
+      name?: string | null;
+      avatar_url?: string | null;
+      html_url?: string;
+    }>(`/users/${encodeURIComponent(cleanUsername)}`, authToken),
+    fetchGitHubJson<
+      Array<{
+        id: number;
+        name: string;
+        full_name: string;
+        owner?: { login?: string };
+        private: boolean;
+        default_branch?: string;
+        description?: string | null;
+        html_url: string;
+        updated_at: string;
+        language?: string | null;
+      }>
+    >(
+      `/users/${encodeURIComponent(cleanUsername)}/repos?sort=updated&direction=desc&per_page=100`,
+      authToken
+    ),
+  ]);
+
+  if ((profileRes.status === 401 || reposRes.status === 401) && !userToken && authToken) {
+    authToken = undefined;
+    [profileRes, reposRes] = await Promise.all([
+      fetchGitHubJson<{
+        login?: string;
+        name?: string | null;
+        avatar_url?: string | null;
+        html_url?: string;
+      }>(`/users/${encodeURIComponent(cleanUsername)}`, undefined),
+      fetchGitHubJson<
+        Array<{
+          id: number;
+          name: string;
+          full_name: string;
+          owner?: { login?: string };
+          private: boolean;
+          default_branch?: string;
+          description?: string | null;
+          html_url: string;
+          updated_at: string;
+          language?: string | null;
+        }>
+      >(
+        `/users/${encodeURIComponent(cleanUsername)}/repos?sort=updated&direction=desc&per_page=100`,
+        undefined
+      ),
+    ]);
+  }
+
+  if (reposRes.status === 404 || profileRes.status === 404) {
+    return { ok: false, error: `GitHub user "@${cleanUsername}" was not found.` };
+  }
+
+  if (reposRes.status >= 400 || !Array.isArray(reposRes.data)) {
+    return {
+      ok: false,
+      error:
+        reposRes.message ||
+        `Unable to list public repositories for @${cleanUsername} (HTTP ${reposRes.status}).`,
+    };
+  }
+
+  const q = query?.trim().toLowerCase() ?? '';
+  const mapped: GitHubRepoSummary[] = reposRes.data
+    .map((repo) => ({
+      id: repo.id,
+      name: repo.name,
+      fullName: repo.full_name,
+      owner: repo.owner?.login || cleanUsername,
+      private: Boolean(repo.private),
+      defaultBranch: repo.default_branch || 'main',
+      description: repo.description ?? null,
+      htmlUrl: repo.html_url,
+      updatedAt: repo.updated_at,
+      language: repo.language ?? null,
+      canPush: false,
+    }))
+    .filter((repo) => {
+      if (!q) return true;
+      return (
+        repo.fullName.toLowerCase().includes(q) ||
+        (repo.description || '').toLowerCase().includes(q) ||
+        (repo.language || '').toLowerCase().includes(q)
+      );
+    });
+
+  const userProfile: GitHubUserProfile = profileRes.data?.login
+    ? {
+        login: profileRes.data.login,
+        name: profileRes.data.name ?? null,
+        avatarUrl: sanitizeHttpUrl(profileRes.data.avatar_url),
+        htmlUrl:
+          sanitizeHttpUrl(profileRes.data.html_url) ||
+          `https://github.com/${encodeURIComponent(profileRes.data.login)}`,
+      }
+    : {
+        login: cleanUsername,
+        name: null,
+        avatarUrl: null,
+        htmlUrl: `https://github.com/${encodeURIComponent(cleanUsername)}`,
+      };
+
+  return {
+    ok: true,
+    user: userProfile,
+    repos: mapped,
+  };
+}
+
+export async function listGitHubRepoBranches(
+  owner: string,
+  repo: string,
+  token?: string
+): Promise<GitHubBranchesResponse> {
+  if (
+    !VALID_GITHUB_SLUG_RE.test(owner) ||
+    !VALID_GITHUB_SLUG_RE.test(repo) ||
+    owner === '.' ||
+    owner === '..' ||
+    repo === '.' ||
+    repo === '..'
+  ) {
+    return { ok: false, error: 'Invalid GitHub owner or repository name.' };
+  }
+
+  const userToken = token?.trim() || undefined;
+  let authToken = userToken || process.env.GITHUB_TOKEN?.trim() || undefined;
+  let branchesRes = await fetchGitHubJson<Array<{ name?: string }>>(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches?per_page=100`,
+    authToken
+  );
+
+  if (branchesRes.status === 401 && !userToken && authToken) {
+    authToken = undefined;
+    branchesRes = await fetchGitHubJson<Array<{ name?: string }>>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches?per_page=100`,
+      undefined
+    );
+  }
+
+  if (branchesRes.status >= 400 || !Array.isArray(branchesRes.data)) {
+    return {
+      ok: false,
+      error: branchesRes.message || `Failed fetching branches (HTTP ${branchesRes.status}).`,
+    };
+  }
+
+  const branches = branchesRes.data
+    .map((b) => (typeof b.name === 'string' ? b.name : ''))
+    .filter(Boolean);
+
+  return { ok: true, branches };
+}
+
 export async function pullFromGitHubRepo(params: {
   repoUrl: string;
   branch?: string;
@@ -66,13 +403,23 @@ export async function pullFromGitHubRepo(params: {
   }
 
   const { owner, repo, branch: urlBranch, repoFullName } = parsed.data;
-  const authToken = params.token?.trim() || process.env.GITHUB_TOKEN?.trim() || undefined;
+  const userToken = params.token?.trim() || undefined;
+  let authToken = userToken || process.env.GITHUB_TOKEN?.trim() || undefined;
 
-  const repoMetaRes = await fetchGitHubJson<{
+  let repoMetaRes = await fetchGitHubJson<{
     default_branch?: string;
     full_name?: string;
     private?: boolean;
   }>(`/repos/${owner}/${repo}`, authToken);
+
+  if (repoMetaRes.status === 401 && !userToken && authToken) {
+    authToken = undefined;
+    repoMetaRes = await fetchGitHubJson<{
+      default_branch?: string;
+      full_name?: string;
+      private?: boolean;
+    }>(`/repos/${owner}/${repo}`, undefined);
+  }
 
   if (repoMetaRes.status === 401 || repoMetaRes.status === 403 || repoMetaRes.status === 404) {
     return {

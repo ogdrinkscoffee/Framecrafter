@@ -90,12 +90,28 @@ import {
   matchShortcutAction,
 } from './shortcuts';
 import { findElementSourceLocation, insertQuickComponentInProject } from './codeSync';
+import crypto from 'node:crypto';
 import {
   createSlidingWindowRateLimiter,
   validateBundleProjectPayload,
+  validateGithubOAuthExchangePayload,
   validateGithubPullPayload,
   validateGithubPushPayload,
 } from './serverValidation';
+import {
+  escapeHtmlText,
+  escapeJsonForScript,
+  isValidGitHubClientId,
+  isValidGitHubClientSecret,
+  OAuthStateStore,
+  PendingPkceExchangeStore,
+  renderOAuthCallbackHtml,
+  sanitizeClientNonce,
+  sanitizeHttpUrl,
+  sanitizePkceChallenge,
+  verifyPkceS256,
+} from '../../serverOAuth';
+import { listPublicGitHubReposByUsername } from '../../serverGithub';
 import type { SelectedElementInfo } from '../types/editor';
 
 test('scanHtmlElements indexes body elements and skips head/script/style', () => {
@@ -644,8 +660,14 @@ test('bundleProjectInBrowser compiles 55-file Vite/React/TSX project, ignores no
   assert.equal(bundle.usesTailwind, true);
   assert.ok(bundle.importMap);
   assert.equal(bundle.importMap!['react'], 'https://esm.sh/react@19.0.1');
-  assert.equal(bundle.importMap!['lucide-react'], 'https://esm.sh/lucide-react@0.546.0?external=react,react-dom');
-  assert.equal(bundle.importMap!['firebase/app'], 'https://esm.sh/firebase@11.0.0/app?external=react,react-dom');
+  assert.equal(
+    bundle.importMap!['lucide-react'],
+    'https://esm.sh/lucide-react@0.546.0?external=react,react-dom&deps=react@19.0.1,react-dom@19.0.1'
+  );
+  assert.equal(
+    bundle.importMap!['firebase/app'],
+    'https://esm.sh/firebase@11.0.0/app?external=react,react-dom&deps=react@19.0.1,react-dom@19.0.1'
+  );
 
   const srcDoc = buildSrcDoc(uploaded, entry, '', bundle);
   assert.ok(srcDoc.includes('<script type="importmap"'));
@@ -1352,7 +1374,15 @@ test('bundleProjectInBrowser handles external package CSS, CSS modules, tsconfig
     {
       path: 'mantine-app/src/utils/env.ts',
       name: 'env.ts',
-      content: 'import "vite/client";\nimport "virtual:pwa-register";\nimport fs from "node:fs";\nexport const hasFs = typeof fs.existsSync === "function";',
+      content: [
+        'import "vite/client";',
+        'import { registerSW } from "virtual:pwa-register";',
+        'import { useRegisterSW } from "virtual:pwa-register/react";',
+        'import fs from "node:fs";',
+        'export const updateSW = registerSW({ immediate: true });',
+        'export const pwaHook = useRegisterSW();',
+        'export const hasFs = typeof fs.existsSync === "function";',
+      ].join('\n'),
     },
     {
       path: 'mantine-app/src/App.tsx',
@@ -1362,9 +1392,9 @@ test('bundleProjectInBrowser handles external package CSS, CSS modules, tsconfig
         'import "swiper/css";',
         'import { MantineProvider } from "@mantine/core";',
         'import classes from "components/Welcome.module.css";',
-        'import { hasFs } from "@/utils/env";',
+        'import { hasFs, pwaHook, updateSW } from "@/utils/env";',
         'export default function App() {',
-        '  return <MantineProvider><h1 className={classes.title} data-fs={String(hasFs)}>Hi</h1></MantineProvider>;',
+        '  return <MantineProvider><h1 className={classes.title} data-pwa={String(typeof updateSW === "function" && typeof pwaHook.updateServiceWorker === "function")} data-fs={String(hasFs)}>Hi</h1></MantineProvider>;',
         '}',
       ].join('\n'),
     },
@@ -1385,7 +1415,10 @@ test('bundleProjectInBrowser handles external package CSS, CSS modules, tsconfig
   assert.equal(bundle.importMap!['virtual:pwa-register'], undefined);
   assert.equal(bundle.importMap!['node:fs'], undefined);
   assert.equal(bundle.importMap!['components/Welcome.module.css'], undefined);
-  assert.equal(bundle.importMap!['@mantine/core'], 'https://esm.sh/@mantine/core@9.8.1?external=react,react-dom');
+  assert.equal(
+    bundle.importMap!['@mantine/core'],
+    'https://esm.sh/@mantine/core@9.8.1?external=react,react-dom&deps=react@19.2.0,react-dom@19.2.0'
+  );
 
   assert.ok(bundle.externalCssUrls && bundle.externalCssUrls.includes('https://esm.sh/@mantine/core@9.8.1/styles.css'));
   assert.ok(bundle.externalCssUrls!.includes('https://esm.sh/swiper@11.0.0/css'));
@@ -1399,4 +1432,182 @@ test('bundleProjectInBrowser handles external package CSS, CSS modules, tsconfig
   assert.ok(srcDoc.includes('<link rel="stylesheet" href="https://esm.sh/@mantine/core@9.8.1/styles.css" data-ve-internal="external-css" />'));
   assert.ok(srcDoc.includes('<link rel="stylesheet" href="https://esm.sh/swiper@11.0.0/css" data-ve-internal="external-css" />'));
   assert.ok(srcDoc.includes('diagnoseFailureAndReport'));
+});
+
+test('buildSrcDoc preserves $& and $$ replacement tokens inside bundled module payload without corrupting HTML', () => {
+  const html = '<!doctype html><html><head></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>';
+  const files = normalizeUploadedFiles([
+    { path: 'index.html', name: 'index.html', content: html },
+    { path: 'src/main.tsx', name: 'main.tsx', content: 'export const marker = "$& $$ $1";' },
+  ]);
+  const bundle = {
+    js: 'const s = "prefix $& $$ $1 suffix"; console.log(s);',
+    css: '',
+    replacedScriptSrcs: ['/src/main.tsx'],
+    hasInlineModuleReplacement: false,
+    usesTailwind: false,
+  };
+  const srcDoc = buildSrcDoc(files, 'index.html', '', bundle);
+  const payloadMatch = /<script\b[^>]*id="__ve_bundle_payload__"[^>]*>([\s\S]*?)<\/script>/.exec(srcDoc);
+  assert.ok(payloadMatch);
+  const parsed = JSON.parse(payloadMatch[1]) as { js: string };
+  assert.equal(parsed.js, bundle.js);
+});
+
+test('OAuthStateStore enforces single-use timing-safe state verification and rejects tampered or expired tokens', () => {
+  const store = new OAuthStateStore(60_000);
+  const now = 1_700_000_000_000;
+  const issued = store.issue({
+    redirectUri: 'https://ais-dev-example.run.app/auth/github/callback',
+    clientOrigin: 'https://ais-dev-example.run.app',
+    clientNonce: 'client_nonce_abcdef123456',
+    now,
+  });
+
+  assert.equal(store.size(), 1);
+  assert.equal(store.consumeAndVerify('not-a-valid-hex-state', now).ok, false);
+  assert.equal(store.consumeAndVerify(undefined, now).ok, false);
+
+  const valid = store.consumeAndVerify(issued.state, now + 1000);
+  assert.equal(valid.ok, true);
+  if (valid.ok) {
+    assert.equal(valid.entry.clientOrigin, 'https://ais-dev-example.run.app');
+    assert.equal(valid.entry.clientNonce, 'client_nonce_abcdef123456');
+  }
+
+  // Replaying the same state must fail
+  assert.equal(store.consumeAndVerify(issued.state, now + 1001).ok, false);
+
+  // Expired state must fail
+  const expiredIssued = store.issue({
+    redirectUri: 'https://ais-dev-example.run.app/auth/github/callback',
+    clientOrigin: 'https://ais-dev-example.run.app',
+    now,
+  });
+  assert.equal(store.consumeAndVerify(expiredIssued.state, now + 60_001).ok, false);
+});
+
+test('renderOAuthCallbackHtml escapes XSS vectors, attaches CSP nonce, and validates URLs/nonces', () => {
+  assert.equal(sanitizeClientNonce('bad!nonce'), undefined);
+  assert.equal(sanitizeClientNonce('valid_nonce_1234567890'), 'valid_nonce_1234567890');
+  assert.equal(sanitizeHttpUrl('javascript:alert(1)'), null);
+  assert.equal(sanitizeHttpUrl('https://avatars.githubusercontent.com/u/1'), 'https://avatars.githubusercontent.com/u/1');
+  assert.equal(escapeHtmlText(`<img src=x onerror="alert('xss')">`), '&lt;img src=x onerror=&quot;alert(&#39;xss&#39;)&quot;&gt;');
+  assert.ok(!escapeJsonForScript('{"msg":"</script><script>"}').includes('</script>'));
+
+  const html = renderOAuthCallbackHtml({
+    payload: { type: 'GITHUB_OAUTH_ERROR', error: '</script><script>alert(1)</script>', nonce: 'abc123' },
+    messageText: '<script>alert("xss")</script>',
+    targetOrigin: 'https://ais-dev-example.run.app',
+    cspNonce: 'nonceXYZ123',
+  });
+  assert.ok(html.includes('<script nonce="nonceXYZ123">'));
+  assert.ok(!html.includes('onclick='));
+  assert.ok(!html.includes('<script>alert("xss")</script>'));
+  assert.ok(html.includes('&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;'));
+  assert.ok(html.includes('"https:\\/\\/ais-dev-example.run.app"'));
+});
+
+test('isValidGitHubClientId and isValidGitHubClientSecret reject placeholder credentials and accept real formats', () => {
+  assert.equal(isValidGitHubClientId('1234'), false);
+  assert.equal(isValidGitHubClientId('0000000000000000'), false);
+  assert.equal(isValidGitHubClientId('0123456789abcdef0123'), false);
+  assert.equal(isValidGitHubClientId('test_client_id_12345'), false);
+  assert.equal(isValidGitHubClientId('placeholder_id_12345'), false);
+  assert.equal(isValidGitHubClientId('short'), false);
+  assert.equal(isValidGitHubClientId('Ov23liAbCdEfGhIjKlMn'), true);
+  assert.equal(isValidGitHubClientId('abcd1234ef567890abcd'), true);
+
+  assert.equal(isValidGitHubClientSecret('1234'), false);
+  assert.equal(isValidGitHubClientSecret('test_secret_value_123456'), false);
+  assert.equal(isValidGitHubClientSecret('shortsecret'), false);
+  assert.equal(isValidGitHubClientSecret('has spaces in secret value'), false);
+  assert.equal(isValidGitHubClientSecret('9f8e7d6c5b4a3210fedcba9876543210abcdef12'), true);
+});
+
+test('listPublicGitHubReposByUsername rejects invalid GitHub usernames before network call', async () => {
+  const emptyRes = await listPublicGitHubReposByUsername('   ');
+  assert.equal(emptyRes.ok, false);
+
+  const traversalRes = await listPublicGitHubReposByUsername('../etc');
+  assert.equal(traversalRes.ok, false);
+
+  const badCharsRes = await listPublicGitHubReposByUsername('bad user/name');
+  assert.equal(badCharsRes.ok, false);
+});
+
+test('PKCE S256 verification, PendingPkceExchangeStore, and exchange payload validator enforce strict single-use checks', () => {
+  const verifier = 'aB3dEf9_~1234567890-abcdefghijklmnopqrstuvwxyzABCD';
+  const expectedChallenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+
+  assert.equal(sanitizePkceChallenge(expectedChallenge), expectedChallenge);
+  assert.equal(sanitizePkceChallenge('too-short'), undefined);
+  assert.equal(verifyPkceS256(verifier, expectedChallenge), true);
+  assert.equal(verifyPkceS256(`${verifier}x`, expectedChallenge), false);
+  assert.equal(verifyPkceS256('short', expectedChallenge), false);
+
+  const stateStore = new OAuthStateStore(60_000);
+  const issuedState = stateStore.issue({
+    redirectUri: 'https://external-callback.example.com/github',
+    clientOrigin: 'https://ais-dev-example.run.app',
+    clientNonce: 'nonce_1234567890abcd',
+    codeChallenge: expectedChallenge,
+    codeChallengeMethod: 'S256',
+  });
+  const verifiedState = stateStore.consumeAndVerify(issuedState.state);
+  assert.equal(verifiedState.ok, true);
+  if (verifiedState.ok) {
+    assert.equal(verifiedState.entry.codeChallenge, expectedChallenge);
+    assert.equal(verifiedState.entry.codeChallengeMethod, 'S256');
+  }
+
+  const pkceStore = new PendingPkceExchangeStore(60_000);
+  const now = 1_700_000_000_000;
+  const pending = pkceStore.issue({
+    code: 'gh_code_abc',
+    redirectUri: 'https://ais-dev-example.run.app/auth/github/callback',
+    codeChallenge: expectedChallenge,
+    now,
+  });
+  assert.equal(pkceStore.size(), 1);
+  assert.equal(pkceStore.consumeAndVerify('bad-token', now).ok, false);
+  const consumed = pkceStore.consumeAndVerify(pending.exchangeToken, now + 500);
+  assert.equal(consumed.ok, true);
+  if (consumed.ok) {
+    assert.equal(verifyPkceS256(verifier, consumed.entry.codeChallenge), true);
+  }
+  assert.equal(pkceStore.consumeAndVerify(pending.exchangeToken, now + 501).ok, false);
+
+  assert.equal(
+    validateGithubOAuthExchangePayload({
+      code: 'abc',
+      codeVerifier: verifier,
+      exchangeToken: pending.exchangeToken,
+    }).ok,
+    true
+  );
+  assert.equal(
+    validateGithubOAuthExchangePayload({
+      code: 'abc',
+      codeVerifier: 'short',
+      state: issuedState.state,
+    }).ok,
+    false
+  );
+  assert.equal(
+    validateGithubOAuthExchangePayload({
+      code: 'abc',
+      codeVerifier: verifier,
+    }).ok,
+    false
+  );
+});
+
+test('buildIframeBridgeMarkup skips internal overlay siblings when computing unique CSS selectors and clears conflicting side anchors', () => {
+  const bridge = buildIframeBridgeMarkup('edit', null);
+  assert.ok(bridge.includes('!isInternalEl(sib) && sib.tagName === cur.tagName'));
+  assert.ok(bridge.includes('resolveOffsetCoord(el'));
+  assert.ok(bridge.includes('clearRight'));
+  assert.ok(bridge.includes('justifyContent'));
+  assert.ok(bridge.includes('gridTemplateColumns'));
 });

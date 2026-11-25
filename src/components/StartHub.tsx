@@ -1,19 +1,26 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
+  Check,
+  Copy,
+  ExternalLink,
   FilePlus2,
   FolderOpen,
   GitBranch,
   Keyboard,
   LayoutTemplate,
+  Link2,
   Loader2,
+  LogOut,
   Moon,
+  RefreshCw,
   Search,
   Sparkles,
   Sun,
   Upload,
 } from 'lucide-react';
 import type { SampleTemplate, StudioThemeId } from '../types/editor';
+import type { GitHubRepoSummary, GitHubUserProfile } from '../utils/githubSync';
 import { FramecraftLogoMark } from './StudioPrimitives';
 
 interface StartHubProps {
@@ -28,6 +35,21 @@ interface StartHubProps {
   onPullFromGitHub: (repoUrl: string, branch: string) => Promise<boolean>;
   githubBusy: boolean;
   githubError: string | null;
+  githubUser: GitHubUserProfile | null;
+  githubAccountReadOnly?: boolean;
+  githubRepos: GitHubRepoSummary[];
+  githubReposLoading: boolean;
+  githubReposError: string | null;
+  githubConnecting: boolean;
+  githubOAuthConfigured: boolean | null;
+  githubCallbackUrl: string;
+  githubToken: string;
+  onChangeGithubToken: (token: string) => void;
+  onConnectGitHub: () => Promise<void>;
+  onDisconnectGitHub: () => Promise<void>;
+  onRefreshGitHubRepos: (overridePatToken?: string) => Promise<void>;
+  onBrowseGitHubUsername: (username: string) => Promise<void>;
+  onFetchRepoBranches: (owner: string, repo: string) => Promise<string[]>;
   onOpenShortcuts: () => void;
 }
 
@@ -199,17 +221,72 @@ export const StartHub: React.FC<StartHubProps> = ({
   onPullFromGitHub,
   githubBusy,
   githubError,
+  githubUser,
+  githubAccountReadOnly = false,
+  githubRepos,
+  githubReposLoading,
+  githubReposError,
+  githubConnecting,
+  githubOAuthConfigured,
+  githubCallbackUrl,
+  githubToken,
+  onChangeGithubToken,
+  onConnectGitHub,
+  onDisconnectGitHub,
+  onRefreshGitHubRepos,
+  onBrowseGitHubUsername,
+  onFetchRepoBranches,
   onOpenShortcuts,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<(typeof TEMPLATE_CATEGORIES)[number]>('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const [githubSourceMode, setGithubSourceMode] = useState<'connect' | 'url'>('connect');
+  const [directAuthMethod, setDirectAuthMethod] = useState<'username' | 'token'>('username');
+  const [usernameInput, setUsernameInput] = useState('');
+  const [selectedRepoFullName, setSelectedRepoFullName] = useState('');
+  const [selectedBranch, setSelectedBranch] = useState('');
+  const [repoBranches, setRepoBranches] = useState<string[]>([]);
   const [repoInput, setRepoInput] = useState('');
   const [branchInput, setBranchInput] = useState('');
+  const [showPatFallback, setShowPatFallback] = useState(false);
+  const [showOAuthSetup, setShowOAuthSetup] = useState(false);
+  const [copiedCallback, setCopiedCallback] = useState(false);
 
   const filesInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   const isLightTheme = studioTheme === 'daylight' || studioTheme === 'paper';
+
+  useEffect(() => {
+    if (githubRepos.length > 0 && !githubRepos.some((r) => r.fullName === selectedRepoFullName)) {
+      setSelectedRepoFullName(githubRepos[0].fullName);
+    }
+  }, [githubRepos, selectedRepoFullName]);
+
+  const selectedRepoObj = useMemo(
+    () => githubRepos.find((r) => r.fullName === selectedRepoFullName) ?? null,
+    [githubRepos, selectedRepoFullName]
+  );
+
+  useEffect(() => {
+    if (!selectedRepoObj) {
+      setRepoBranches([]);
+      setSelectedBranch('');
+      return;
+    }
+    const defBranch = selectedRepoObj.defaultBranch || 'main';
+    setSelectedBranch(defBranch);
+    setRepoBranches([defBranch]);
+    let cancelled = false;
+    void onFetchRepoBranches(selectedRepoObj.owner, selectedRepoObj.name).then((fetched) => {
+      if (cancelled || fetched.length === 0) return;
+      const merged = Array.from(new Set([defBranch, ...fetched]));
+      setRepoBranches(merged);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRepoObj, onFetchRepoBranches]);
 
   const filteredTemplates = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -239,6 +316,25 @@ export const StartHub: React.FC<StartHubProps> = ({
     await onPullFromGitHub(trimmed, branchInput.trim());
   };
 
+  const handleLoadSelectedRepo = async () => {
+    if (!selectedRepoObj) return;
+    await onPullFromGitHub(
+      selectedRepoObj.fullName,
+      selectedBranch || selectedRepoObj.defaultBranch || 'main'
+    );
+  };
+
+  const handleCopyCallback = async () => {
+    if (!githubCallbackUrl) return;
+    try {
+      await navigator.clipboard.writeText(githubCallbackUrl);
+      setCopiedCallback(true);
+      window.setTimeout(() => setCopiedCallback(false), 1800);
+    } catch {
+      // Clipboard unavailable
+    }
+  };
+
   return (
     <div
       data-testid="start-hub"
@@ -259,7 +355,6 @@ export const StartHub: React.FC<StartHubProps> = ({
         ref={folderInputRef}
         type="file"
         multiple
-        // @ts-expect-error webkitdirectory supported on Chromium/WebKit
         webkitdirectory=""
         className="hidden"
         onChange={handleFileChange}
@@ -413,53 +508,355 @@ export const StartHub: React.FC<StartHubProps> = ({
               </div>
             </div>
 
-            {/* 4. Pull from GitHub Repo */}
-            <form
-              onSubmit={handleGitPullSubmit}
-              className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)] p-4 flex flex-col justify-between gap-2.5 studio-card-highlight"
-            >
-              <div className="flex items-center justify-between">
-                <span className="w-8 h-8 rounded-lg bg-[var(--studio-elevated)] border border-[var(--studio-border)] flex items-center justify-center text-emerald-500">
+            {/* 4. GitHub Repositories (Direct OAuth primary, URL secondary) */}
+            <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)] p-4 flex flex-col justify-between gap-2.5 studio-card-highlight">
+              <div className="flex items-center justify-between gap-2">
+                <span className="w-8 h-8 rounded-lg bg-[var(--studio-elevated)] border border-[var(--studio-border)] flex items-center justify-center text-emerald-500 shrink-0">
                   <GitBranch className="w-4 h-4" strokeWidth={1.5} />
                 </span>
-                <span className="text-[11px] font-medium text-[var(--studio-muted-soft)]">No API key needed</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setGithubSourceMode((prev) => (prev === 'connect' ? 'url' : 'connect'))
+                  }
+                  className="text-[11px] font-medium text-indigo-500 dark:text-indigo-400 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <Link2 className="w-3 h-3" />
+                  <span>{githubSourceMode === 'connect' ? 'Use repo URL' : 'My GitHub Repos'}</span>
+                </button>
               </div>
-              <div className="space-y-1.5">
-                <div className="text-[13px] font-semibold text-[var(--studio-text-strong)]">
-                  Pull from GitHub Repo
+
+              {githubSourceMode === 'connect' ? (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-[13px] font-semibold text-[var(--studio-text-strong)] truncate">
+                        {githubUser ? `@${githubUser.login}` : 'GitHub Repositories'}
+                      </span>
+                      {githubUser && githubAccountReadOnly && (
+                        <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded bg-[var(--studio-elevated)] border border-[var(--studio-border)] text-[var(--studio-muted)] shrink-0">
+                          public
+                        </span>
+                      )}
+                    </div>
+                    {githubUser && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => void onRefreshGitHubRepos()}
+                          disabled={githubReposLoading}
+                          title="Refresh repository list"
+                          className="p-1 rounded hover:bg-[var(--studio-hover)] text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] cursor-pointer"
+                        >
+                          <RefreshCw
+                            className={`w-3 h-3 ${githubReposLoading ? 'animate-spin' : ''}`}
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void onDisconnectGitHub()}
+                          title="Switch GitHub account"
+                          className="p-1 rounded hover:bg-[var(--studio-hover)] text-[var(--studio-muted)] hover:text-red-400 cursor-pointer"
+                        >
+                          <LogOut className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {githubUser ? (
+                    githubReposLoading && githubRepos.length === 0 ? (
+                      <div className="h-7 flex items-center gap-1.5 text-[11px] text-[var(--studio-muted)]">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        <span>Loading your repos...</span>
+                      </div>
+                    ) : githubRepos.length > 0 ? (
+                      <div className="space-y-1.5">
+                        <select
+                          aria-label="Select GitHub repository"
+                          value={selectedRepoFullName}
+                          onChange={(e) => setSelectedRepoFullName(e.target.value)}
+                          className="w-full h-7 px-2 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11.5px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                        >
+                          {githubRepos.map((repo) => (
+                            <option key={repo.id} value={repo.fullName}>
+                              {repo.fullName}
+                              {repo.private ? ' (private)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            aria-label="Select branch for repository"
+                            value={selectedBranch || selectedRepoObj?.defaultBranch || 'main'}
+                            onChange={(e) => setSelectedBranch(e.target.value)}
+                            className="flex-1 min-w-0 h-7 px-2 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                          >
+                            {(repoBranches.length > 0
+                              ? repoBranches
+                              : [selectedRepoObj?.defaultBranch || 'main']
+                            ).map((b) => (
+                              <option key={b} value={b}>
+                                {b}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            disabled={githubBusy || !selectedRepoObj}
+                            onClick={() => void handleLoadSelectedRepo()}
+                            className="h-7 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white text-[11px] font-semibold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                          >
+                            {githubBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Load'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-[var(--studio-muted)]">
+                        No public repositories found. Try a token for private repos or use a URL.
+                      </p>
+                    )
+                  ) : githubOAuthConfigured === true ? (
+                    <div className="space-y-1.5">
+                      <button
+                        type="button"
+                        disabled={githubConnecting || githubReposLoading}
+                        onClick={() => void onConnectGitHub()}
+                        className="w-full h-7 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-55 text-white text-[11.5px] font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                      >
+                        {githubConnecting || githubReposLoading ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <GitBranch className="w-3.5 h-3.5" strokeWidth={1.6} />
+                        )}
+                        <span>{githubConnecting ? 'Authorizing...' : 'Connect GitHub'}</span>
+                      </button>
+
+                      <div className="flex items-center justify-between gap-2 text-[10.5px] text-[var(--studio-muted)]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDirectAuthMethod('username');
+                            setShowPatFallback((prev) => !prev);
+                          }}
+                          className="text-indigo-500 dark:text-indigo-400 hover:underline cursor-pointer"
+                        >
+                          {showPatFallback ? 'Hide options' : 'Browse user / token'}
+                        </button>
+                      </div>
+
+                      {showPatFallback && (
+                        <div className="space-y-1.5 pt-0.5">
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="text"
+                              value={usernameInput}
+                              onChange={(e) => setUsernameInput(e.target.value)}
+                              placeholder="@username (public repos)"
+                              aria-label="GitHub username"
+                              className="flex-1 min-w-0 h-6 px-2 rounded bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={!usernameInput.trim() || githubReposLoading}
+                              onClick={() => void onBrowseGitHubUsername(usernameInput)}
+                              className="h-6 px-2 rounded bg-[var(--studio-elevated)] border border-[var(--studio-border-strong)] hover:bg-[var(--studio-hover)] disabled:opacity-45 text-[var(--studio-text-strong)] text-[10.5px] font-semibold cursor-pointer"
+                            >
+                              Browse
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="password"
+                              value={githubToken}
+                              onChange={(e) => onChangeGithubToken(e.target.value)}
+                              placeholder="ghp_... token"
+                              aria-label="GitHub personal access token"
+                              className="flex-1 min-w-0 h-6 px-2 rounded bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={!githubToken.trim() || githubReposLoading}
+                              onClick={() => void onRefreshGitHubRepos(githubToken)}
+                              className="h-6 px-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-45 text-white text-[10.5px] font-semibold cursor-pointer"
+                            >
+                              Go
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <div className="grid grid-cols-2 gap-1 p-0.5 rounded-md bg-[var(--studio-elevated)] border border-[var(--studio-border)] text-[10.5px]">
+                        <button
+                          type="button"
+                          onClick={() => setDirectAuthMethod('username')}
+                          className={`h-5 rounded font-medium cursor-pointer transition-colors ${
+                            directAuthMethod === 'username'
+                              ? 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs'
+                              : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
+                          }`}
+                        >
+                          Username
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDirectAuthMethod('token')}
+                          className={`h-5 rounded font-medium cursor-pointer transition-colors ${
+                            directAuthMethod === 'token'
+                              ? 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs'
+                              : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
+                          }`}
+                        >
+                          GitHub Token
+                        </button>
+                      </div>
+
+                      {directAuthMethod === 'username' ? (
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void onBrowseGitHubUsername(usernameInput);
+                          }}
+                          className="flex items-center gap-1"
+                        >
+                          <input
+                            type="text"
+                            value={usernameInput}
+                            onChange={(e) => setUsernameInput(e.target.value)}
+                            placeholder="GitHub @username"
+                            aria-label="GitHub username"
+                            className="flex-1 min-w-0 h-7 px-2 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11.5px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500"
+                          />
+                          <button
+                            type="submit"
+                            disabled={!usernameInput.trim() || githubReposLoading}
+                            className="h-7 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white text-[11px] font-semibold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                          >
+                            {githubReposLoading ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              'Browse'
+                            )}
+                          </button>
+                        </form>
+                      ) : (
+                        <div className="space-y-1">
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void onRefreshGitHubRepos(githubToken);
+                            }}
+                            className="flex items-center gap-1"
+                          >
+                            <input
+                              type="password"
+                              value={githubToken}
+                              onChange={(e) => onChangeGithubToken(e.target.value)}
+                              placeholder="Paste ghp_... token"
+                              aria-label="GitHub personal access token"
+                              className="flex-1 min-w-0 h-7 px-2 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11.5px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!githubToken.trim() || githubReposLoading}
+                              className="h-7 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white text-[11px] font-semibold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                            >
+                              {githubReposLoading ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                'Connect'
+                              )}
+                            </button>
+                          </form>
+                          <div className="flex items-center justify-between gap-2 text-[10.5px]">
+                            <a
+                              href="https://github.com/settings/tokens/new?description=Framecraft+Studio&scopes=repo,read:user"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-indigo-500 dark:text-indigo-400 hover:underline"
+                            >
+                              <span>Generate token on GitHub</span>
+                              <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                            {githubCallbackUrl && (
+                              <button
+                                type="button"
+                                onClick={() => setShowOAuthSetup((prev) => !prev)}
+                                className="text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] cursor-pointer"
+                              >
+                                {showOAuthSetup ? 'Hide OAuth' : 'OAuth App'}
+                              </button>
+                            )}
+                          </div>
+                          {showOAuthSetup && githubCallbackUrl && (
+                            <div className="flex items-center justify-between gap-1.5 pt-0.5 text-[10px] text-[var(--studio-muted)]">
+                              <span className="truncate">Set GITHUB_CLIENT_ID (PKCE ready)</span>
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyCallback()}
+                                title={githubCallbackUrl}
+                                className="inline-flex items-center gap-1 text-indigo-500 dark:text-indigo-400 hover:underline shrink-0 cursor-pointer"
+                              >
+                                {copiedCallback ? (
+                                  <Check className="w-2.5 h-2.5" />
+                                ) : (
+                                  <Copy className="w-2.5 h-2.5" />
+                                )}
+                                <span>{copiedCallback ? 'Copied' : 'Copy callback'}</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(githubError || githubReposError) && (
+                    <p className="text-[11px] text-red-500 dark:text-red-400 leading-snug">
+                      {githubError || githubReposError}
+                    </p>
+                  )}
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={repoInput}
-                    onChange={(e) => setRepoInput(e.target.value)}
-                    placeholder="owner/repo"
-                    aria-label="GitHub repository URL to pull"
-                    className="flex-1 min-w-0 h-7 px-2 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11.5px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500"
-                  />
-                  <input
-                    type="text"
-                    value={branchInput}
-                    onChange={(e) => setBranchInput(e.target.value)}
-                    placeholder="auto"
-                    aria-label="GitHub branch"
-                    className="w-14 h-7 px-1.5 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500"
-                  />
-                  <button
-                    type="submit"
-                    disabled={githubBusy || !repoInput.trim()}
-                    className="h-7 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white text-[11px] font-semibold inline-flex items-center gap-1 shrink-0 cursor-pointer"
-                  >
-                    {githubBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Pull'}
-                  </button>
-                </div>
-                {githubError && (
-                  <p className="text-[11px] text-red-500 dark:text-red-400 leading-snug">
-                    {githubError}
-                  </p>
-                )}
-              </div>
-            </form>
+              ) : (
+                <form onSubmit={handleGitPullSubmit} className="space-y-1.5">
+                  <div className="text-[13px] font-semibold text-[var(--studio-text-strong)]">
+                    Pull by Repository URL
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={repoInput}
+                      onChange={(e) => setRepoInput(e.target.value)}
+                      placeholder="owner/repo or URL"
+                      aria-label="GitHub repository URL to pull"
+                      className="flex-1 min-w-0 h-7 px-2 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11.5px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500"
+                    />
+                    <input
+                      type="text"
+                      value={branchInput}
+                      onChange={(e) => setBranchInput(e.target.value)}
+                      placeholder="auto"
+                      aria-label="GitHub branch"
+                      className="w-14 h-7 px-1.5 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] text-[11px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={githubBusy || !repoInput.trim()}
+                      className="h-7 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-45 text-white text-[11px] font-semibold inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      {githubBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Pull'}
+                    </button>
+                  </div>
+                  {githubError && (
+                    <p className="text-[11px] text-red-500 dark:text-red-400 leading-snug">
+                      {githubError}
+                    </p>
+                  )}
+                </form>
+              )}
+            </div>
           </div>
         </section>
 
