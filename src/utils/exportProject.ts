@@ -13,7 +13,7 @@ export function triggerBlobDownload(blob: Blob, filename: string): void {
 }
 
 const BINARY_ZIP_EXT_RE =
-  /\.(png|jpe?g|gif|webp|avif|ico|woff2?|ttf|eot|otf|apk|aab|jar|keystore|jks|mp4|webm|mp3|wav|pdf)$/i;
+  /\.(png|jpe?g|gif|webp|avif|bmp|ico|woff2?|ttf|eot|otf|apk|aab|jar|keystore|jks|mp4|webm|mp3|wav|pdf|zip)$/i;
 
 export async function exportProjectAsZip(
   files: ProjectFile[],

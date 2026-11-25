@@ -1,7 +1,8 @@
-import type { EditorMode, ProjectFile } from '../types/editor';
+import type { EditorMode, ProjectFile, StudioThemeId } from '../types/editor';
 
 const WORKSPACE_STORAGE_KEY = 'framecraft_autosave_workspace_v1';
 const DEFAULT_MODE_STORAGE_KEY = 'framecraft_default_mode_v1';
+const STUDIO_THEME_STORAGE_KEY = 'framecraft_studio_theme_v1';
 
 export interface SavedWorkspacePayload {
   projectName: string;
@@ -13,7 +14,11 @@ export interface SavedWorkspacePayload {
 export function saveWorkspaceToStorage(payload: SavedWorkspacePayload): boolean {
   try {
     if (typeof window === 'undefined' || !window.localStorage) return false;
-    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(payload));
+    const serializablePayload: SavedWorkspacePayload = {
+      ...payload,
+      files: payload.files.map(({ blobUrl: _blobUrl, ...rest }) => rest),
+    };
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(serializablePayload));
     return true;
   } catch {
     return false;
@@ -65,6 +70,29 @@ export function saveDefaultModePreference(mode: EditorMode): void {
   }
 }
 
+export function loadStudioThemePreference(): StudioThemeId {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return 'obsidian';
+    const raw = window.localStorage.getItem(STUDIO_THEME_STORAGE_KEY);
+    if (raw === 'daylight' || raw === 'paper' || raw === 'slate' || raw === 'obsidian') {
+      return raw;
+    }
+    return 'obsidian';
+  } catch {
+    return 'obsidian';
+  }
+}
+
+export function saveStudioThemePreference(theme: StudioThemeId): void {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(STUDIO_THEME_STORAGE_KEY, theme);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export interface FileSystemDirectoryHandleLike {
   name: string;
   queryPermission?: (desc: { mode: 'read' | 'readwrite' }) => Promise<'granted' | 'denied' | 'prompt'>;
@@ -78,7 +106,7 @@ export interface FileSystemDirectoryHandleLike {
     options?: { create?: boolean }
   ) => Promise<{
     createWritable: () => Promise<{
-      write: (data: string) => Promise<void>;
+      write: (data: string | Uint8Array | Blob) => Promise<void>;
       close: () => Promise<void>;
     }>;
   }>;
@@ -168,7 +196,17 @@ export async function writeProjectFilesToDirectory(
         create: true,
       });
       const writable = await fileHandle.createWritable();
-      await writable.write(file.content);
+      const dataUrlMatch = /^data:[^;]+;base64,(.+)$/s.exec(file.content);
+      if (dataUrlMatch && typeof atob === 'function') {
+        const binaryStr = atob(dataUrlMatch[1]);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let idx = 0; idx < binaryStr.length; idx++) {
+          bytes[idx] = binaryStr.charCodeAt(idx);
+        }
+        await writable.write(bytes);
+      } else {
+        await writable.write(file.content);
+      }
       await writable.close();
     }
 

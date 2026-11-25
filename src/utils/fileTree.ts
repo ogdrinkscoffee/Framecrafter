@@ -6,6 +6,7 @@ export type FileExtensionCategory =
   | 'style'
   | 'json'
   | 'html'
+  | 'image'
   | 'native'
   | 'other';
 
@@ -47,8 +48,8 @@ export function getFileBadgeStyle(pathOrName: string, fallbackType?: ProjectFile
     return {
       category: 'react',
       shortLabel: ext === '.tsx' ? 'TSX' : 'JSX',
-      textColorClass: 'text-cyan-400',
-      badgeClass: 'bg-cyan-500/12 text-cyan-300 border-cyan-500/25',
+      textColorClass: 'text-cyan-500 dark:text-cyan-400',
+      badgeClass: 'bg-cyan-500/12 text-cyan-700 dark:text-cyan-300 border-cyan-500/25',
     };
   }
 
@@ -56,8 +57,8 @@ export function getFileBadgeStyle(pathOrName: string, fallbackType?: ProjectFile
     return {
       category: 'script',
       shortLabel: ext.startsWith('.t') || ext.endsWith('ts') ? 'TS' : 'JS',
-      textColorClass: 'text-sky-400',
-      badgeClass: 'bg-sky-500/12 text-sky-300 border-sky-500/25',
+      textColorClass: 'text-sky-600 dark:text-sky-400',
+      badgeClass: 'bg-sky-500/12 text-sky-700 dark:text-sky-300 border-sky-500/25',
     };
   }
 
@@ -65,8 +66,8 @@ export function getFileBadgeStyle(pathOrName: string, fallbackType?: ProjectFile
     return {
       category: 'style',
       shortLabel: ext === '.scss' ? 'SCSS' : 'CSS',
-      textColorClass: 'text-violet-400',
-      badgeClass: 'bg-violet-500/12 text-violet-300 border-violet-500/25',
+      textColorClass: 'text-violet-600 dark:text-violet-400',
+      badgeClass: 'bg-violet-500/12 text-violet-700 dark:text-violet-300 border-violet-500/25',
     };
   }
 
@@ -74,8 +75,8 @@ export function getFileBadgeStyle(pathOrName: string, fallbackType?: ProjectFile
     return {
       category: 'json',
       shortLabel: 'JSON',
-      textColorClass: 'text-amber-400',
-      badgeClass: 'bg-amber-500/12 text-amber-300 border-amber-500/25',
+      textColorClass: 'text-amber-600 dark:text-amber-400',
+      badgeClass: 'bg-amber-500/12 text-amber-700 dark:text-amber-300 border-amber-500/25',
     };
   }
 
@@ -83,8 +84,27 @@ export function getFileBadgeStyle(pathOrName: string, fallbackType?: ProjectFile
     return {
       category: 'html',
       shortLabel: 'HTML',
-      textColorClass: 'text-orange-400',
-      badgeClass: 'bg-orange-500/12 text-orange-300 border-orange-500/25',
+      textColorClass: 'text-orange-600 dark:text-orange-400',
+      badgeClass: 'bg-orange-500/12 text-orange-700 dark:text-orange-300 border-orange-500/25',
+    };
+  }
+
+  if (
+    ext === '.png' ||
+    ext === '.jpg' ||
+    ext === '.jpeg' ||
+    ext === '.gif' ||
+    ext === '.webp' ||
+    ext === '.svg' ||
+    ext === '.ico' ||
+    ext === '.avif' ||
+    ext === '.bmp'
+  ) {
+    return {
+      category: 'image',
+      shortLabel: ext.slice(1).toUpperCase().slice(0, 4),
+      textColorClass: 'text-pink-600 dark:text-pink-400',
+      badgeClass: 'bg-pink-500/12 text-pink-700 dark:text-pink-300 border-pink-500/25',
     };
   }
 
@@ -98,16 +118,16 @@ export function getFileBadgeStyle(pathOrName: string, fallbackType?: ProjectFile
     return {
       category: 'native',
       shortLabel: ext === '.xml' ? 'XML' : ext === '.kts' || ext === '.gradle' ? 'GRD' : 'KT',
-      textColorClass: 'text-emerald-400',
-      badgeClass: 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25',
+      textColorClass: 'text-emerald-600 dark:text-emerald-400',
+      badgeClass: 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 border-emerald-500/25',
     };
   }
 
   return {
     category: 'other',
     shortLabel: ext ? ext.slice(1).toUpperCase().slice(0, 4) : 'FILE',
-    textColorClass: 'text-zinc-400',
-    badgeClass: 'bg-zinc-500/12 text-zinc-300 border-white/[0.08]',
+    textColorClass: 'text-[var(--studio-muted)]',
+    badgeClass: 'bg-zinc-500/10 text-[var(--studio-muted)] border-[var(--studio-border)]',
   };
 }
 

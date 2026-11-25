@@ -45,6 +45,7 @@ import {
   RotateCw,
   SendToBack,
   Shapes,
+  SlidersHorizontal,
   Square,
   Star,
   StickyNote,
@@ -69,7 +70,9 @@ import type {
   ViewportPreset,
 } from '../types/editor';
 import { QUICK_INSERT_ITEMS } from '../utils/codeSync';
+import { FONT_CATEGORIES, STUDIO_FONT_CATALOG, matchStudioFontOption } from '../utils/fontLibrary';
 import { buildTableHtml, cssColorToHex } from '../utils/htmlSync';
+import { HoverIconButton } from './StudioPrimitives';
 
 interface CanvasWorkspaceProps {
   centerTab: CenterTab;
@@ -143,15 +146,6 @@ const HANDLE_POSITIONS: Record<ResizeHandleDir, string> = {
   sw: '-bottom-1.5 -left-1.5',
   w: 'top-1/2 -translate-y-1/2 -left-1.5',
 };
-
-const RIBBON_FONT_OPTIONS = [
-  { label: 'Segoe UI', value: '"Segoe UI", Tahoma, sans-serif' },
-  { label: 'Calibri', value: 'Calibri, Arial, sans-serif' },
-  { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
-  { label: 'Georgia', value: 'Georgia, serif' },
-  { label: 'Times New Roman', value: '"Times New Roman", serif' },
-  { label: 'JetBrains Mono', value: '"JetBrains Mono", monospace' },
-];
 
 const POINT_SIZE_OPTIONS = [
   '8pt',
@@ -799,11 +793,11 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const currentZIndex = Number.parseInt(selectedElement?.styles.zIndex || '0', 10) || 0;
 
   return (
-    <main className="flex-1 min-w-0 flex flex-col bg-[#09090b] min-h-0 overflow-x-hidden">
+    <main className="flex-1 min-w-0 flex flex-col bg-[var(--studio-bg)] min-h-0 overflow-x-hidden">
       {/* Workspace Sub-Toolbar */}
-      <div className="h-10 shrink-0 border-b border-white/[0.08] bg-[#111114] px-4 flex items-center justify-between gap-3">
+      <div className="h-9 shrink-0 border-b border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 flex items-center justify-between gap-2">
         <div
-          className="inline-flex items-center p-0.5 rounded-full bg-[#09090b] border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] shrink-0"
+          className="inline-flex items-center h-7 p-0.5 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] shrink-0"
           role="tablist"
           aria-label="Workspace View"
         >
@@ -812,13 +806,13 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             role="tab"
             aria-selected={centerTab === 'preview'}
             onClick={() => onChangeCenterTab('preview')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 h-full px-2.5 rounded-md text-[11.5px] font-medium studio-pressable whitespace-nowrap shrink-0 cursor-pointer ${
               centerTab === 'preview'
-                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-                : 'text-zinc-400 hover:text-zinc-100'
+                ? 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs border border-[var(--studio-border)]'
+                : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] border border-transparent'
             }`}
           >
-            <Eye className="w-3.5 h-3.5" strokeWidth={1.5} />
+            <Eye className="w-3.5 h-3.5" strokeWidth={1.4} />
             Live Canvas
           </button>
           <button
@@ -826,18 +820,18 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             role="tab"
             aria-selected={centerTab === 'code'}
             onClick={() => onChangeCenterTab('code')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 h-full px-2.5 rounded-md text-[11.5px] font-medium studio-pressable whitespace-nowrap shrink-0 cursor-pointer ${
               centerTab === 'code'
-                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-                : 'text-zinc-400 hover:text-zinc-100'
+                ? 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs border border-[var(--studio-border)]'
+                : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] border border-transparent'
             }`}
           >
-            <Code2 className="w-3.5 h-3.5" strokeWidth={1.5} />
+            <Code2 className="w-3.5 h-3.5" strokeWidth={1.4} />
             Code Editor
           </button>
         </div>
 
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           {centerTab === 'preview' && (
             <>
               {editorMode === 'edit' && (
@@ -848,10 +842,10 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                     aria-expanded={quickAddOpen}
                     aria-haspopup="menu"
                     title="Quick Insert Component"
-                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11.5px] font-semibold transition-all whitespace-nowrap cursor-pointer ${
+                    className={`inline-flex items-center gap-1 h-7 px-2.5 rounded-md border text-[11.5px] font-semibold studio-pressable whitespace-nowrap cursor-pointer ${
                       quickAddOpen
                         ? 'bg-gradient-to-b from-blue-500 to-indigo-600 text-white border-indigo-400/40 shadow-[0_0_14px_rgba(99,102,241,0.35)]'
-                        : 'bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/35 text-indigo-300'
+                        : 'bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/35 text-indigo-700 dark:text-indigo-300'
                     }`}
                   >
                     <Plus className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -861,7 +855,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                     <div
                       role="menu"
                       aria-label="Quick Insert Component Palette"
-                      className="absolute right-0 top-full mt-1.5 z-50 w-52 rounded-xl border border-white/[0.1] bg-[#18181b] p-1.5 shadow-2xl shadow-black/70 studio-card-highlight space-y-0.5"
+                      className="absolute right-0 top-full mt-1.5 z-50 w-52 rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] p-1.5 shadow-2xl studio-card-highlight space-y-0.5"
                     >
                       <div className="px-2 py-1 studio-section-header">Quick Insert</div>
                       {QUICK_INSERT_ITEMS.map((item) => (
@@ -873,10 +867,10 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                             setQuickAddOpen(false);
                             onQuickInsertKind(item.kind);
                           }}
-                          className="w-full text-left flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-[#e4e4e7] hover:bg-[#27272a] hover:text-white transition-colors cursor-pointer"
+                          className="w-full text-left flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[12px] font-medium text-[var(--studio-text)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] transition-colors cursor-pointer"
                         >
                           <span>{item.label}</span>
-                          <Plus className="w-3 h-3 text-indigo-400" strokeWidth={1.5} />
+                          <Plus className="w-3 h-3 text-indigo-500 dark:text-indigo-400" strokeWidth={1.5} />
                         </button>
                       ))}
                     </div>
@@ -884,26 +878,23 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 </div>
               )}
 
-              <button
-                type="button"
+              <HoverIconButton
                 onClick={onToggleOutlines}
-                aria-pressed={showOutlines}
+                label="Outlines"
+                ariaLabel="Toggle layout outlines"
                 title="Show dashed layout outlines around elements"
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11.5px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                  showOutlines
-                    ? 'bg-cyan-500/15 border-cyan-400/45 text-cyan-300'
-                    : 'bg-[#18181b] border-white/[0.08] studio-card-highlight text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a]'
-                }`}
-              >
-                <BoxSelect className="w-3.5 h-3.5" strokeWidth={1.5} />
-                Outlines
-              </button>
+                active={showOutlines}
+                ariaPressed={showOutlines}
+                size="sm"
+                tone="accent"
+                icon={<BoxSelect className="w-3.5 h-3.5" strokeWidth={1.4} />}
+              />
 
               <select
                 aria-label="Canvas Zoom"
                 value={canvasZoom}
                 onChange={(e) => onChangeCanvasZoom(e.target.value as CanvasZoomMode)}
-                className="h-7 rounded-lg bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight px-2 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 cursor-pointer"
+                className="h-7 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] studio-card-highlight px-2 text-[11.5px] font-mono-tabular text-[var(--studio-text)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 cursor-pointer"
               >
                 <option value="50">50%</option>
                 <option value="75">75%</option>
@@ -911,7 +902,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 <option value="fit">Fit ({Math.round(zoomScale * 100)}%)</option>
               </select>
 
-              <span className="text-zinc-700 hidden 2xl:inline" aria-hidden="true">
+              <span className="text-[var(--studio-border-strong)] hidden xl:inline" aria-hidden="true">
                 ·
               </span>
             </>
@@ -920,36 +911,47 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           <button
             type="button"
             onClick={onToggleDefaultStartupMode}
-            title="Choose whether Framecraft starts in Editing Mode or Using Mode by default"
-            className="hidden 2xl:inline text-[11.5px] text-zinc-400 hover:text-zinc-100 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            aria-label={`Default startup: ${defaultStartupMode === 'interact' ? 'Using Mode' : 'Editing Mode'}`}
+            title={`Default startup: ${defaultStartupMode === 'interact' ? 'Using Mode' : 'Editing Mode'} (click to switch)`}
+            className="group hidden xl:inline-flex items-center h-7 px-1.5 rounded-md text-[11.5px] text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Default startup:{' '}
-            <span className="text-[#e4e4e7] font-medium">
-              {defaultStartupMode === 'interact' ? 'Using Mode' : 'Editing Mode'}
+            <SlidersHorizontal className="w-3.5 h-3.5 shrink-0" strokeWidth={1.4} />
+            <span className="studio-reveal-label">
+              {defaultStartupMode === 'interact' ? 'Startup: Using' : 'Startup: Editing'}
             </span>
           </button>
 
           <button
             type="button"
             onClick={onToggleAutoSave}
-            title="Toggle automatic saving of layout edits into project code"
-            className="inline-flex items-center gap-1.5 text-[11.5px] text-zinc-400 hover:text-zinc-100 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            aria-label={`Auto-Save: ${
+              autoSaveStatus.enabled
+                ? autoSaveStatus.diskConnected
+                  ? `Disk (${autoSaveStatus.diskFolderName})`
+                  : 'Code'
+                : 'Off'
+            }`}
+            title={
+              autoSaveStatus.enabled
+                ? autoSaveStatus.diskConnected
+                  ? `Auto-Save: Disk (${autoSaveStatus.diskFolderName})`
+                  : 'Auto-Save: Code (click to toggle)'
+                : 'Auto-Save: Off (click to enable)'
+            }
+            className="group inline-flex items-center h-7 px-1.5 rounded-md text-[11.5px] text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
             <CheckCircle2
-              className={`w-3.5 h-3.5 ${
-                autoSaveStatus.enabled ? 'text-emerald-400' : 'text-zinc-500'
+              className={`w-3.5 h-3.5 shrink-0 ${
+                autoSaveStatus.enabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-[var(--studio-muted-soft)]'
               }`}
-              strokeWidth={1.5}
+              strokeWidth={1.4}
             />
-            <span className="truncate max-w-[140px]">
-              Auto-Save:{' '}
-              <strong className="font-medium text-[#e4e4e7]">
-                {autoSaveStatus.enabled
-                  ? autoSaveStatus.diskConnected
-                    ? `Disk (${autoSaveStatus.diskFolderName})`
-                    : 'Code'
-                  : 'Off'}
-              </strong>
+            <span className="studio-reveal-label">
+              {autoSaveStatus.enabled
+                ? autoSaveStatus.diskConnected
+                  ? 'Auto-Save: Disk'
+                  : 'Auto-Save: Code'
+                : 'Auto-Save: Off'}
             </span>
           </button>
         </div>
@@ -959,54 +961,54 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       {centerTab === 'preview' && editorMode === 'edit' && (
         <div
           ref={menuContainerRef}
-          className="shrink-0 border-b border-white/[0.08] bg-[#111114]"
+          className="shrink-0 border-b border-[var(--studio-border)] bg-[var(--studio-surface)]"
           role="toolbar"
           aria-label="MS 365 Formatting and Insert Ribbon"
         >
           {/* Tier 1: Home / Text Formatting */}
-          <div className="min-h-9 px-2.5 py-1 border-b border-white/[0.06] flex flex-wrap items-center gap-1">
-            <button
-              type="button"
-              disabled={!selectedElement && !formatPainterActive}
+          <div className="min-h-9 px-3 py-1 border-b border-[var(--studio-border-subtle)] flex flex-wrap items-center gap-1">
+            <HoverIconButton
               onClick={onToggleFormatPainter}
-              aria-label="Format Painter"
-              aria-pressed={formatPainterActive}
+              disabled={!selectedElement && !formatPainterActive}
+              label="Format"
+              ariaLabel="Format Painter"
+              ariaPressed={formatPainterActive}
               title={
                 formatPainterActive
                   ? 'Click any target element on the canvas to paste copied styles'
                   : 'Copy styles from selected element (Format Painter)'
               }
-              className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11.5px] font-medium transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
-                formatPainterActive
-                  ? 'bg-amber-500 text-zinc-950'
-                  : 'text-zinc-300 hover:text-white hover:bg-[#27272a]'
-              }`}
-            >
-              <Paintbrush className="w-3.5 h-3.5" strokeWidth={1.5} />
-              <span className="hidden xl:inline">Format</span>
-            </button>
+              active={formatPainterActive}
+              tone="accent"
+              size="sm"
+              icon={<Paintbrush className="w-3.5 h-3.5" strokeWidth={1.4} />}
+            />
 
-            <div className="h-4 w-px bg-white/[0.08] shrink-0" aria-hidden="true" />
+            <div className="h-4 w-px bg-[var(--studio-border)] shrink-0" aria-hidden="true" />
 
             <select
               aria-label="Ribbon font family"
               disabled={!selectedElement}
               value={
-                RIBBON_FONT_OPTIONS.some((f) => f.value === selectedElement?.styles.fontFamily)
-                  ? selectedElement?.styles.fontFamily
-                  : ''
+                matchStudioFontOption(
+                  selectedElement?.inlineStyles['font-family'] || selectedElement?.styles.fontFamily
+                )?.cssValue ?? ''
               }
               onChange={(e) => {
                 if (!e.target.value) return;
                 onCommitFormattingStyle({ 'font-family': e.target.value }, 'Change font family');
               }}
-              className="h-6.5 w-22 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] px-1.5 text-[11.5px] text-[#e4e4e7] disabled:opacity-40 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 shrink-0"
+              className="h-7 w-32 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] px-1.5 text-[11.5px] text-[var(--studio-text)] disabled:opacity-40 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 shrink-0"
             >
-              <option value="">Font</option>
-              {RIBBON_FONT_OPTIONS.map((f) => (
-                <option key={f.label} value={f.value}>
-                  {f.label}
-                </option>
+              <option value="">Font Family</option>
+              {FONT_CATEGORIES.map((category) => (
+                <optgroup key={category} label={category}>
+                  {STUDIO_FONT_CATALOG.filter((f) => f.category === category).map((f) => (
+                    <option key={f.id} value={f.cssValue}>
+                      {f.label}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
 
@@ -1018,7 +1020,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 if (!e.target.value) return;
                 onCommitFormattingStyle({ 'font-size': e.target.value }, `Set size ${e.target.value}`);
               }}
-              className="h-6.5 w-14 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] px-1 text-[11.5px] font-mono-tabular text-[#e4e4e7] disabled:opacity-40 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 shrink-0"
+              className="h-7 w-14 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] px-1 text-[11.5px] font-mono-tabular text-[var(--studio-text)] disabled:opacity-40 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 shrink-0"
             >
               <option value="">pt</option>
               {POINT_SIZE_OPTIONS.map((pt) => (
@@ -1034,9 +1036,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               onClick={() => stepFontSize(2)}
               aria-label="Increase font size"
               title="Increase Font Size"
-              className="p-1 rounded-md text-zinc-300 hover:text-white hover:bg-[#27272a] disabled:opacity-40 cursor-pointer shrink-0"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)] disabled:opacity-40 studio-pressable cursor-pointer shrink-0"
             >
-              <AArrowUp className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <AArrowUp className="w-3.5 h-3.5" strokeWidth={1.4} />
             </button>
             <button
               type="button"
@@ -1044,12 +1046,12 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               onClick={() => stepFontSize(-2)}
               aria-label="Decrease font size"
               title="Decrease Font Size"
-              className="p-1 rounded-md text-zinc-300 hover:text-white hover:bg-[#27272a] disabled:opacity-40 cursor-pointer shrink-0"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)] disabled:opacity-40 studio-pressable cursor-pointer shrink-0"
             >
-              <AArrowDown className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <AArrowDown className="w-3.5 h-3.5" strokeWidth={1.4} />
             </button>
 
-            <div className="h-4 w-px bg-white/[0.08] shrink-0" aria-hidden="true" />
+            <div className="h-4 w-px bg-[var(--studio-border)] shrink-0" aria-hidden="true" />
 
             <button
               type="button"
@@ -1060,8 +1062,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               aria-label="Bold"
               aria-pressed={Boolean(isBold)}
               title="Bold"
-              className={`p-1 rounded-md transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
-                isBold ? 'bg-indigo-500 text-white shadow-xs' : 'text-zinc-300 hover:text-white hover:bg-[#27272a]'
+              className={`h-7 w-7 inline-flex items-center justify-center rounded-md studio-pressable disabled:opacity-40 cursor-pointer shrink-0 ${
+                isBold ? 'bg-indigo-500 text-white shadow-xs' : 'text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)]'
               }`}
             >
               <Bold className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1078,8 +1080,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               aria-label="Italic"
               aria-pressed={Boolean(isItalic)}
               title="Italic"
-              className={`p-1 rounded-md transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
-                isItalic ? 'bg-indigo-500 text-white shadow-xs' : 'text-zinc-300 hover:text-white hover:bg-[#27272a]'
+              className={`h-7 w-7 inline-flex items-center justify-center rounded-md studio-pressable disabled:opacity-40 cursor-pointer shrink-0 ${
+                isItalic ? 'bg-indigo-500 text-white shadow-xs' : 'text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)]'
               }`}
             >
               <Italic className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1091,8 +1093,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               aria-label="Underline"
               aria-pressed={isUnderline}
               title="Underline"
-              className={`p-1 rounded-md transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
-                isUnderline ? 'bg-indigo-500 text-white shadow-xs' : 'text-zinc-300 hover:text-white hover:bg-[#27272a]'
+              className={`h-7 w-7 inline-flex items-center justify-center rounded-md studio-pressable disabled:opacity-40 cursor-pointer shrink-0 ${
+                isUnderline ? 'bg-indigo-500 text-white shadow-xs' : 'text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)]'
               }`}
             >
               <Underline className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1104,8 +1106,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               aria-label="Strikethrough"
               aria-pressed={isStrike}
               title="Strikethrough"
-              className={`p-1 rounded-md transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
-                isStrike ? 'bg-indigo-500 text-white shadow-xs' : 'text-zinc-300 hover:text-white hover:bg-[#27272a]'
+              className={`h-7 w-7 inline-flex items-center justify-center rounded-md studio-pressable disabled:opacity-40 cursor-pointer shrink-0 ${
+                isStrike ? 'bg-indigo-500 text-white shadow-xs' : 'text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)]'
               }`}
             >
               <Strikethrough className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1122,8 +1124,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               aria-label="Superscript"
               aria-pressed={isSuper}
               title="Superscript"
-              className={`p-1 rounded-md transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
-                isSuper ? 'bg-indigo-500 text-white shadow-xs' : 'text-zinc-300 hover:text-white hover:bg-[#27272a]'
+              className={`h-7 w-7 inline-flex items-center justify-center rounded-md studio-pressable disabled:opacity-40 cursor-pointer shrink-0 ${
+                isSuper ? 'bg-indigo-500 text-white shadow-xs' : 'text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)]'
               }`}
             >
               <Superscript className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1140,8 +1142,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               aria-label="Subscript"
               aria-pressed={isSub}
               title="Subscript"
-              className={`p-1 rounded-md transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
-                isSub ? 'bg-indigo-500 text-white shadow-xs' : 'text-zinc-300 hover:text-white hover:bg-[#27272a]'
+              className={`h-7 w-7 inline-flex items-center justify-center rounded-md studio-pressable disabled:opacity-40 cursor-pointer shrink-0 ${
+                isSub ? 'bg-indigo-500 text-white shadow-xs' : 'text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)]'
               }`}
             >
               <Subscript className="w-3.5 h-3.5" strokeWidth={1.5} />
@@ -1158,7 +1160,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 )
               }
               title="Change Case (Aa)"
-              className="h-6.5 w-13 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] px-1 text-[11.5px] text-[#e4e4e7] disabled:opacity-40 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 shrink-0"
+              className="h-7 w-13 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] px-1 text-[11.5px] text-[var(--studio-text)] disabled:opacity-40 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 shrink-0"
             >
               <option value="">Aa</option>
               <option value="uppercase">ABC</option>
@@ -1169,13 +1171,13 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
             <label
               title="Font Color / Shape Fill"
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#18181b] border border-white/[0.08] hover:bg-[#27272a] shrink-0 ${
+              className={`inline-flex items-center gap-1 h-7 px-1.5 rounded-md bg-[var(--studio-elevated)] border border-[var(--studio-border)] hover:bg-[var(--studio-hover)] shrink-0 ${
                 selectedElement ? 'cursor-pointer' : 'opacity-40 pointer-events-none'
               }`}
             >
-              <span className="text-[11px] font-bold text-[#e4e4e7]">A</span>
+              <span className="text-[11px] font-bold text-[var(--studio-text)]">A</span>
               <span
-                className="relative w-3.5 h-3.5 rounded-xs border border-white/[0.2] overflow-hidden"
+                className="relative w-3.5 h-3.5 rounded-xs border border-[var(--studio-border-strong)] overflow-hidden"
                 style={{ backgroundColor: selectedColorHex }}
               >
                 <input
@@ -1200,7 +1202,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               }
               aria-label="Highlight yellow"
               title="Text Highlight"
-              className="p-1 rounded-md text-amber-300 hover:bg-[#27272a] disabled:opacity-40 cursor-pointer shrink-0"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-amber-600 dark:text-amber-300 hover:bg-[var(--studio-hover)] disabled:opacity-40 studio-pressable cursor-pointer shrink-0"
             >
               <Highlighter className="w-3.5 h-3.5" strokeWidth={1.5} />
             </button>
@@ -1211,12 +1213,12 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               onClick={clearInlineFormatting}
               aria-label="Clear formatting"
               title="Clear All Formatting"
-              className="p-1 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] disabled:opacity-40 cursor-pointer shrink-0"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)] disabled:opacity-40 studio-pressable cursor-pointer shrink-0"
             >
               <RemoveFormatting className="w-3.5 h-3.5" strokeWidth={1.5} />
             </button>
 
-            <div className="h-4 w-px bg-white/[0.08] shrink-0" aria-hidden="true" />
+            <div className="h-4 w-px bg-[var(--studio-border)] shrink-0" aria-hidden="true" />
 
             {[
               { val: 'left', icon: AlignLeft, label: 'Ribbon align left' },
@@ -1230,17 +1232,17 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 disabled={!selectedElement}
                 aria-label={label}
                 onClick={() => onCommitFormattingStyle({ 'text-align': val }, `Align ${val}`)}
-                className={`p-1 rounded-md transition-colors disabled:opacity-40 cursor-pointer shrink-0 ${
+                className={`h-7 w-7 inline-flex items-center justify-center rounded-md studio-pressable disabled:opacity-40 cursor-pointer shrink-0 ${
                   selectedElement?.styles.textAlign === val
-                    ? 'bg-[#27272a] text-white ring-1 ring-white/[0.12]'
-                    : 'text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a]'
+                    ? 'bg-[var(--studio-hover)] text-[var(--studio-text-strong)] ring-1 ring-[var(--studio-border-strong)]'
+                    : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)]'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" strokeWidth={1.5} />
               </button>
             ))}
 
-            <div className="h-4 w-px bg-white/[0.08] shrink-0" aria-hidden="true" />
+            <div className="h-4 w-px bg-[var(--studio-border)] shrink-0" aria-hidden="true" />
 
             <button
               type="button"
@@ -1248,7 +1250,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               onClick={() => adjustIndent(-16)}
               aria-label="Decrease indent"
               title="Decrease Indent"
-              className="p-1 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] disabled:opacity-40 cursor-pointer shrink-0"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)] disabled:opacity-40 studio-pressable cursor-pointer shrink-0"
             >
               <IndentDecrease className="w-3.5 h-3.5" strokeWidth={1.5} />
             </button>
@@ -1258,7 +1260,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               onClick={() => adjustIndent(16)}
               aria-label="Increase indent"
               title="Increase Indent"
-              className="p-1 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] disabled:opacity-40 cursor-pointer shrink-0"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-md text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)] disabled:opacity-40 studio-pressable cursor-pointer shrink-0"
             >
               <IndentIncrease className="w-3.5 h-3.5" strokeWidth={1.5} />
             </button>
@@ -1271,7 +1273,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 if (!e.target.value) return;
                 onCommitFormattingStyle({ 'line-height': e.target.value }, `Line spacing ${e.target.value}`);
               }}
-              className="h-6.5 w-14 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] px-1 text-[11.5px] font-mono-tabular text-[#e4e4e7] disabled:opacity-40 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 shrink-0"
+              className="h-7 w-14 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] px-1 text-[11.5px] font-mono-tabular text-[var(--studio-text)] disabled:opacity-40 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 shrink-0"
             >
               <option value="">Line</option>
               <option value="1.0">1.0</option>
@@ -1291,22 +1293,22 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   aria-expanded={openMenu === 'shapes'}
                   aria-haspopup="menu"
                   onClick={() => setOpenMenu((m) => (m === 'shapes' ? null : 'shapes'))}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11.5px] font-medium transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1 h-7 px-2 rounded-md border text-[11.5px] font-medium studio-pressable cursor-pointer ${
                     openMenu === 'shapes'
-                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
-                      : 'bg-[#18181b] hover:bg-[#27272a] border-white/[0.08] studio-card-highlight text-[#e4e4e7]'
+                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-700 dark:text-indigo-300'
+                      : 'bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border-[var(--studio-border)] studio-card-highlight text-[var(--studio-text)]'
                   }`}
                 >
-                  <Shapes className="w-3.5 h-3.5 text-cyan-400" strokeWidth={1.5} />
+                  <Shapes className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" strokeWidth={1.5} />
                   Shapes
-                  <ChevronDown className="w-3 h-3 text-zinc-400" strokeWidth={1.5} />
+                  <ChevronDown className="w-3 h-3 text-[var(--studio-muted)]" strokeWidth={1.5} />
                 </button>
 
                 {openMenu === 'shapes' && (
                   <div
                     role="menu"
                     aria-label="Shapes Gallery"
-                    className="absolute left-0 top-full mt-1.5 z-50 w-80 rounded-xl border border-white/[0.1] bg-[#18181b] p-2.5 shadow-2xl shadow-black/70 studio-card-highlight"
+                    className="absolute left-0 top-full mt-1.5 z-50 w-80 rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] p-2.5 shadow-2xl studio-card-highlight"
                   >
                     <div className="studio-section-header mb-2 px-1">
                       Insert Shape or Line
@@ -1321,9 +1323,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                             setOpenMenu(null);
                             onQuickInsertById(id);
                           }}
-                          className="flex flex-col items-center justify-center gap-1 py-2 px-1.5 rounded-lg bg-[#111114] hover:bg-[#27272a] border border-white/[0.08] hover:border-indigo-500/45 text-[#e4e4e7] transition-colors cursor-pointer"
+                          className="flex flex-col items-center justify-center gap-1 py-2 px-1.5 rounded-lg bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] hover:border-indigo-500/45 text-[var(--studio-text)] transition-colors cursor-pointer"
                         >
-                          <Icon className="w-4 h-4 text-cyan-400" strokeWidth={1.5} />
+                          <Icon className="w-4 h-4 text-cyan-600 dark:text-cyan-400" strokeWidth={1.5} />
                           <span className="text-[10.5px] leading-tight text-center truncate w-full">
                             {label}
                           </span>
@@ -1341,26 +1343,26 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   aria-expanded={openMenu === 'table'}
                   aria-haspopup="menu"
                   onClick={() => setOpenMenu((m) => (m === 'table' ? null : 'table'))}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11.5px] font-medium transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1 h-7 px-2 rounded-md border text-[11.5px] font-medium studio-pressable cursor-pointer ${
                     openMenu === 'table'
-                      ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
-                      : 'bg-[#18181b] hover:bg-[#27272a] border-white/[0.08] studio-card-highlight text-[#e4e4e7]'
+                      ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-700 dark:text-emerald-300'
+                      : 'bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border-[var(--studio-border)] studio-card-highlight text-[var(--studio-text)]'
                   }`}
                 >
-                  <Table2 className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.5} />
+                  <Table2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" strokeWidth={1.4} />
                   Table
-                  <ChevronDown className="w-3 h-3 text-zinc-400" strokeWidth={1.5} />
+                  <ChevronDown className="w-3 h-3 text-[var(--studio-muted)]" strokeWidth={1.4} />
                 </button>
 
                 {openMenu === 'table' && (
                   <div
                     role="menu"
                     aria-label="Insert Table Grid"
-                    className="absolute left-0 top-full mt-1.5 z-50 w-52 rounded-xl border border-white/[0.1] bg-[#18181b] p-3 shadow-2xl shadow-black/70 studio-card-highlight"
+                    className="absolute left-0 top-full mt-1.5 z-50 w-52 rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] p-3 shadow-2xl studio-card-highlight"
                   >
-                    <div className="flex items-center justify-between text-[11.5px] font-medium text-[#e4e4e7] mb-2">
+                    <div className="flex items-center justify-between text-[11.5px] font-medium text-[var(--studio-text)] mb-2">
                       <span>Insert Table</span>
-                      <span className="font-mono-tabular text-emerald-400">
+                      <span className="font-mono-tabular text-emerald-600 dark:text-emerald-400">
                         {tableHover.rows} × {tableHover.cols}
                       </span>
                     </div>
@@ -1382,8 +1384,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                               }}
                               className={`h-5 rounded-xs border transition-colors cursor-pointer ${
                                 active
-                                  ? 'bg-emerald-500/35 border-emerald-400'
-                                  : 'bg-[#111114] border-white/[0.1] hover:border-zinc-500'
+                                  ? 'bg-emerald-500/35 border-emerald-500'
+                                  : 'bg-[var(--studio-elevated)] border-[var(--studio-border)] hover:border-[var(--studio-border-strong)]'
                               }`}
                             />
                           );
@@ -1396,7 +1398,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                         setOpenMenu(null);
                         onQuickInsertById('table-3x3');
                       }}
-                      className="mt-2.5 w-full py-1.5 rounded-lg bg-[#27272a] hover:bg-zinc-700 text-[11.5px] text-zinc-100 font-medium cursor-pointer"
+                      className="mt-2.5 w-full py-1.5 rounded-lg bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] text-[11.5px] text-[var(--studio-text-strong)] font-medium cursor-pointer"
                     >
                       Quick 3×3 Data Table
                     </button>
@@ -1404,25 +1406,23 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 )}
               </div>
 
-              <button
-                type="button"
+              <HoverIconButton
                 onClick={() => onQuickInsertById('list-bulleted')}
+                label="Bullets"
+                ariaLabel="Insert Bulleted List"
                 title="Insert Bulleted List"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] cursor-pointer"
-              >
-                <List className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.5} />
-                Bullets
-              </button>
+                size="sm"
+                icon={<List className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" strokeWidth={1.4} />}
+              />
 
-              <button
-                type="button"
+              <HoverIconButton
                 onClick={() => onQuickInsertById('list-numbered')}
+                label="Numbered"
+                ariaLabel="Insert Numbered List"
                 title="Insert Numbered List"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] cursor-pointer"
-              >
-                <ListOrdered className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.5} />
-                Numbered
-              </button>
+                size="sm"
+                icon={<ListOrdered className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" strokeWidth={1.4} />}
+              />
 
               {/* Insert Image Popover */}
               <div className="relative">
@@ -1430,18 +1430,18 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   type="button"
                   aria-expanded={openMenu === 'image'}
                   onClick={() => setOpenMenu((m) => (m === 'image' ? null : 'image'))}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11.5px] font-medium transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1 h-7 px-2 rounded-md border text-[11.5px] font-medium studio-pressable cursor-pointer ${
                     openMenu === 'image'
-                      ? 'bg-violet-500/20 border-violet-500/50 text-violet-300'
-                      : 'bg-[#18181b] hover:bg-[#27272a] border-white/[0.08] studio-card-highlight text-[#e4e4e7]'
+                      ? 'bg-violet-500/20 border-violet-500/50 text-violet-700 dark:text-violet-300'
+                      : 'bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border-[var(--studio-border)] studio-card-highlight text-[var(--studio-text)]'
                   }`}
                 >
-                  <ImageIcon className="w-3.5 h-3.5 text-violet-400" strokeWidth={1.5} />
+                  <ImageIcon className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" strokeWidth={1.4} />
                   Image
                 </button>
 
                 {openMenu === 'image' && (
-                  <div className="absolute left-0 top-full mt-1.5 z-50 w-72 rounded-xl border border-white/[0.1] bg-[#18181b] p-3 shadow-2xl shadow-black/70 studio-card-highlight space-y-2">
+                  <div className="absolute left-0 top-full mt-1.5 z-50 w-72 rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] p-3 shadow-2xl studio-card-highlight space-y-2">
                     <div className="studio-section-header">Insert Image</div>
                     <input
                       type="url"
@@ -1449,7 +1449,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                       value={imageUrlDraft}
                       onChange={(e) => setImageUrlDraft(e.target.value)}
                       placeholder="https://example.com/photo.jpg"
-                      className="w-full rounded-lg bg-[#09090b] border border-white/[0.08] px-2.5 py-1.5 text-[12px] text-[#e4e4e7] placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                      className="w-full rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2.5 py-1.5 text-[12px] text-[var(--studio-text)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                     />
                     <input
                       type="text"
@@ -1457,7 +1457,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                       value={imageAltDraft}
                       onChange={(e) => setImageAltDraft(e.target.value)}
                       placeholder="Alt description"
-                      className="w-full rounded-lg bg-[#09090b] border border-white/[0.08] px-2.5 py-1.5 text-[12px] text-[#e4e4e7] placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                      className="w-full rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2.5 py-1.5 text-[12px] text-[var(--studio-text)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                     />
                     <div className="flex items-center gap-1.5">
                       <button
@@ -1484,7 +1484,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                           setOpenMenu(null);
                           onQuickInsertById('image-placeholder');
                         }}
-                        className="px-2.5 py-1.5 rounded-lg bg-[#27272a] hover:bg-zinc-700 text-[11.5px] text-zinc-100 cursor-pointer"
+                        className="px-2.5 py-1.5 rounded-lg bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] text-[11.5px] text-[var(--studio-text-strong)] cursor-pointer"
                       >
                         Placeholder
                       </button>
@@ -1493,37 +1493,38 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 )}
               </div>
 
-              <button
-                type="button"
+              <HoverIconButton
                 onClick={() => onQuickInsertById('link-anchor')}
+                label="Link"
+                ariaLabel="Insert Hyperlink"
                 title="Insert Hyperlink"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] cursor-pointer"
-              >
-                <Link2 className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />
-                Link
-              </button>
+                size="sm"
+                icon={<Link2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" strokeWidth={1.4} />}
+              />
 
               {/* MS Word Symbol Picker */}
               <div className="relative">
                 <button
                   type="button"
+                  aria-label="Insert Symbol"
                   aria-expanded={openMenu === 'symbols'}
                   aria-haspopup="menu"
+                  title="Insert Symbol"
                   onClick={() => setOpenMenu((m) => (m === 'symbols' ? null : 'symbols'))}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11.5px] font-medium transition-colors cursor-pointer ${
+                  className={`group inline-flex items-center h-7 px-1.5 rounded-md border text-[11.5px] font-medium studio-card-highlight studio-pressable cursor-pointer ${
                     openMenu === 'symbols'
-                      ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
-                      : 'bg-[#18181b] hover:bg-[#27272a] border-white/[0.08] studio-card-highlight text-[#e4e4e7]'
+                      ? 'bg-amber-500/20 border-amber-500/50 text-amber-700 dark:text-amber-300'
+                      : 'bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border-[var(--studio-border)] text-[var(--studio-text)]'
                   }`}
                 >
-                  <span className="font-semibold text-amber-400">Ω</span>
-                  Symbol
+                  <span className="font-semibold text-amber-600 dark:text-amber-400 leading-none w-3.5 text-center">Ω</span>
+                  <span className="studio-reveal-label">Symbol</span>
                 </button>
                 {openMenu === 'symbols' && (
                   <div
                     role="menu"
                     aria-label="Insert Symbol"
-                    className="absolute left-0 top-full mt-1.5 z-50 w-56 rounded-xl border border-white/[0.1] bg-[#18181b] p-2.5 shadow-2xl shadow-black/70 studio-card-highlight"
+                    className="absolute left-0 top-full mt-1.5 z-50 w-56 rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] p-2.5 shadow-2xl studio-card-highlight"
                   >
                     <div className="studio-section-header mb-2">Insert Symbol</div>
                     <div className="grid grid-cols-6 gap-1">
@@ -1536,7 +1537,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                             setOpenMenu(null);
                             onInsertSymbol(sym);
                           }}
-                          className="h-7 rounded-md bg-[#111114] hover:bg-[#27272a] border border-white/[0.08] hover:border-amber-500/50 text-sm text-zinc-100 cursor-pointer"
+                          className="h-7 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] hover:border-amber-500/50 text-sm text-[var(--studio-text-strong)] cursor-pointer"
                         >
                           {sym}
                         </button>
@@ -1550,29 +1551,31 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               <div className="relative">
                 <button
                   type="button"
+                  aria-label="Find and Replace"
                   aria-expanded={openMenu === 'find'}
+                  title="Find & Replace text"
                   onClick={() => {
                     setFindStatus(null);
                     setOpenMenu((m) => (m === 'find' ? null : 'find'));
                   }}
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11.5px] font-medium transition-colors cursor-pointer ${
+                  className={`group inline-flex items-center h-7 px-1.5 rounded-md border text-[11.5px] font-medium studio-card-highlight studio-pressable cursor-pointer ${
                     openMenu === 'find'
-                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
-                      : 'bg-[#18181b] hover:bg-[#27272a] border-white/[0.08] studio-card-highlight text-[#e4e4e7]'
+                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-700 dark:text-indigo-300'
+                      : 'bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border-[var(--studio-border)] text-[var(--studio-text)]'
                   }`}
                 >
-                  <Replace className="w-3.5 h-3.5 text-cyan-400" strokeWidth={1.5} />
-                  Replace
+                  <Replace className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" strokeWidth={1.4} />
+                  <span className="studio-reveal-label">Replace</span>
                 </button>
                 {openMenu === 'find' && (
                   <div
                     aria-label="Find and Replace"
-                    className="absolute right-0 top-full mt-1.5 z-50 w-72 rounded-xl border border-white/[0.1] bg-[#18181b] p-3 shadow-2xl shadow-black/70 studio-card-highlight space-y-2"
+                    className="absolute right-0 top-full mt-1.5 z-50 w-72 rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] p-3 shadow-2xl studio-card-highlight space-y-2"
                   >
                     <div className="flex items-center justify-between">
                       <span className="studio-section-header">Find &amp; Replace</span>
                       {findStatus && (
-                        <span className="text-[11px] text-emerald-400 font-medium">{findStatus}</span>
+                        <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">{findStatus}</span>
                       )}
                     </div>
                     <input
@@ -1581,7 +1584,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                       value={findDraft}
                       onChange={(e) => setFindDraft(e.target.value)}
                       placeholder="Find text on page..."
-                      className="w-full rounded-lg bg-[#09090b] border border-white/[0.08] px-2.5 py-1.5 text-[12px] text-[#e4e4e7] placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                      className="w-full rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2.5 py-1.5 text-[12px] text-[var(--studio-text)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                     />
                     <input
                       type="text"
@@ -1589,15 +1592,15 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                       value={replaceDraft}
                       onChange={(e) => setReplaceDraft(e.target.value)}
                       placeholder="Replace with..."
-                      className="w-full rounded-lg bg-[#09090b] border border-white/[0.08] px-2.5 py-1.5 text-[12px] text-[#e4e4e7] placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                      className="w-full rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2.5 py-1.5 text-[12px] text-[var(--studio-text)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                     />
                     <div className="flex items-center justify-between gap-2 pt-0.5">
-                      <label className="inline-flex items-center gap-1.5 text-[11.5px] text-zinc-400 cursor-pointer">
+                      <label className="inline-flex items-center gap-1.5 text-[11.5px] text-[var(--studio-muted)] cursor-pointer">
                         <input
                           type="checkbox"
                           checked={findMatchCase}
                           onChange={(e) => setFindMatchCase(e.target.checked)}
-                          className="rounded border-white/[0.15] bg-[#09090b] accent-indigo-500"
+                          className="rounded border-[var(--studio-border-strong)] bg-[var(--studio-bg)] accent-indigo-500"
                         />
                         Match case
                       </label>
@@ -1622,40 +1625,34 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
             {/* Arrange, Rotate & Duplicate Shortcuts */}
             <div className="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                disabled={!selectedElement}
+              <HoverIconButton
                 onClick={onDuplicateSelected}
-                aria-label="Duplicate selected"
+                disabled={!selectedElement}
+                label="Duplicate"
+                ariaLabel="Duplicate selected"
                 title="Duplicate Element (Ctrl+D)"
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-[11.5px] font-medium text-[#e4e4e7] disabled:opacity-40 cursor-pointer"
-              >
-                <Copy className="w-3.5 h-3.5 text-zinc-300" strokeWidth={1.5} />
-                <span className="hidden 2xl:inline">Duplicate</span>
-              </button>
-              <button
-                type="button"
-                disabled={!selectedElement}
+                size="sm"
+                icon={<Copy className="w-3.5 h-3.5 text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]" strokeWidth={1.4} />}
+              />
+              <HoverIconButton
                 onClick={() => rotateBy(-15)}
-                aria-label="Rotate left 15 degrees"
+                disabled={!selectedElement}
+                label="-15°"
+                ariaLabel="Rotate left 15 degrees"
                 title="Rotate Left 15°"
-                className="p-1 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-zinc-300 disabled:opacity-40 cursor-pointer"
-              >
-                <RotateCcw className="w-3.5 h-3.5" strokeWidth={1.5} />
-              </button>
-              <button
-                type="button"
-                disabled={!selectedElement}
+                size="sm"
+                icon={<RotateCcw className="w-3.5 h-3.5 text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]" strokeWidth={1.4} />}
+              />
+              <HoverIconButton
                 onClick={() => rotateBy(15)}
-                aria-label="Rotate right 15 degrees"
-                title="Rotate Right 15°"
-                className="p-1 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-zinc-300 disabled:opacity-40 cursor-pointer"
-              >
-                <RotateCw className="w-3.5 h-3.5" strokeWidth={1.5} />
-              </button>
-              <button
-                type="button"
                 disabled={!selectedElement}
+                label="+15°"
+                ariaLabel="Rotate right 15 degrees"
+                title="Rotate Right 15°"
+                size="sm"
+                icon={<RotateCw className="w-3.5 h-3.5 text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]" strokeWidth={1.4} />}
+              />
+              <HoverIconButton
                 onClick={() =>
                   onCommitFormattingStyle(
                     {
@@ -1668,15 +1665,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                     'Bring forward'
                   )
                 }
-                aria-label="Bring Forward"
-                title="Bring Forward"
-                className="p-1 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-zinc-300 disabled:opacity-40 cursor-pointer"
-              >
-                <BringToFront className="w-3.5 h-3.5" strokeWidth={1.5} />
-              </button>
-              <button
-                type="button"
                 disabled={!selectedElement}
+                label="Forward"
+                ariaLabel="Bring Forward"
+                title="Bring Forward"
+                size="sm"
+                icon={<BringToFront className="w-3.5 h-3.5 text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]" strokeWidth={1.4} />}
+              />
+              <HoverIconButton
                 onClick={() =>
                   onCommitFormattingStyle(
                     {
@@ -1689,12 +1685,13 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                     'Send backward'
                   )
                 }
-                aria-label="Send Backward"
+                disabled={!selectedElement}
+                label="Backward"
+                ariaLabel="Send Backward"
                 title="Send Backward"
-                className="p-1 rounded-md bg-[#18181b] hover:bg-[#27272a] border border-white/[0.08] studio-card-highlight text-zinc-300 disabled:opacity-40 cursor-pointer"
-              >
-                <SendToBack className="w-3.5 h-3.5" strokeWidth={1.5} />
-              </button>
+                size="sm"
+                icon={<SendToBack className="w-3.5 h-3.5 text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]" strokeWidth={1.4} />}
+              />
             </div>
           </div>
         </div>
@@ -1707,12 +1704,12 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           className="flex-1 min-h-0 overflow-auto builder-scroll canvas-grid-bg p-5 flex justify-center items-start"
         >
           {!entryHtmlPath ? (
-            <div className="self-center max-w-md text-center bg-[#18181b] border border-white/[0.08] studio-card-highlight rounded-2xl p-6 shadow-2xl shadow-black/60">
-              <h2 className="font-display text-base font-semibold text-zinc-100 mb-2">
+            <div className="self-center max-w-md text-center bg-[var(--studio-surface)] border border-[var(--studio-border)] studio-card-highlight rounded-2xl p-6 shadow-xl">
+              <h2 className="font-display text-base font-semibold text-[var(--studio-text-strong)] mb-2">
                 No HTML entry file found
               </h2>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Load a project containing an <code className="font-mono-tabular text-zinc-200">index.html</code>{' '}
+              <p className="text-xs text-[var(--studio-muted)] leading-relaxed">
+                Load a project containing an <code className="font-mono-tabular text-[var(--studio-text-strong)]">index.html</code>{' '}
                 file or select one of the starter templates from the left sidebar to launch the
                 live preview.
               </p>
@@ -1728,7 +1725,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               {frameDrag && (
                 <div
                   data-testid="canvas-size-badge"
-                  className="fixed top-28 left-1/2 -translate-x-1/2 z-50 px-3 py-1 rounded-full bg-[#18181b]/95 border border-indigo-500/70 text-[12px] font-mono-tabular font-semibold text-indigo-200 shadow-2xl pointer-events-none"
+                  className="fixed top-28 left-1/2 -translate-x-1/2 z-50 px-3 py-1 rounded-full bg-[var(--studio-surface)] border border-indigo-500/70 text-[12px] font-mono-tabular font-semibold text-indigo-600 dark:text-indigo-200 shadow-2xl pointer-events-none"
                 >
                   {frameDrag.currentW} × {frameDrag.currentH} px
                 </div>
@@ -1745,7 +1742,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   transform: zoomScale !== 1 ? `scale(${zoomScale})` : undefined,
                   transformOrigin: 'top center',
                 }}
-                className="relative min-h-[300px] flex flex-col rounded-xl border border-white/[0.1] bg-[#111114] shadow-2xl shadow-black/60"
+                className="relative min-h-[300px] flex flex-col rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl"
               >
                 {/* Left Edge Frame Resize Handle */}
                 <div
@@ -1758,7 +1755,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   title="Drag horizontally to resize Live Canvas width"
                   className="absolute -left-2 top-8 bottom-8 w-3 z-30 flex items-center justify-center group"
                 >
-                  <div className="w-1 h-10 rounded-full bg-zinc-600/80 group-hover:bg-indigo-400 transition-colors" />
+                  <div className="w-1 h-10 rounded-full bg-[var(--studio-muted-soft)] group-hover:bg-indigo-500 transition-colors" />
                 </div>
 
                 {/* Right Edge Frame Resize Handle */}
@@ -1772,7 +1769,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   title="Drag horizontally to resize Live Canvas width"
                   className="absolute -right-2 top-8 bottom-8 w-3 z-30 flex items-center justify-center group"
                 >
-                  <div className="w-1 h-10 rounded-full bg-zinc-600/80 group-hover:bg-indigo-400 transition-colors" />
+                  <div className="w-1 h-10 rounded-full bg-[var(--studio-muted-soft)] group-hover:bg-indigo-500 transition-colors" />
                 </div>
 
                 {/* Bottom Edge Frame Resize Handle */}
@@ -1786,23 +1783,23 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   title="Drag vertically to resize Live Canvas height"
                   className="absolute left-8 right-8 -bottom-2 h-3 z-30 flex items-center justify-center group"
                 >
-                  <div className="h-1 w-12 rounded-full bg-zinc-600/80 group-hover:bg-indigo-400 transition-colors" />
+                  <div className="h-1 w-12 rounded-full bg-[var(--studio-muted-soft)] group-hover:bg-indigo-500 transition-colors" />
                 </div>
 
                 {/* Compact Elevated Device Header Bar */}
-                <div className="h-9 shrink-0 px-3.5 border-b border-white/[0.08] bg-[#18181b] rounded-t-xl flex items-center justify-between gap-2 text-[12px] text-zinc-400 studio-card-highlight">
+                <div className="h-8 shrink-0 px-3 border-b border-[var(--studio-border)] bg-[var(--studio-elevated)] rounded-t-xl flex items-center justify-between gap-2 text-[11.5px] text-[var(--studio-muted)] studio-card-highlight">
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="flex items-center gap-1.5 mr-1 shrink-0" aria-hidden="true">
-                      <span className="w-2 h-2 rounded-full bg-white/[0.12]" />
-                      <span className="w-2 h-2 rounded-full bg-white/[0.12]" />
-                      <span className="w-2 h-2 rounded-full bg-white/[0.12]" />
+                      <span className="w-2 h-2 rounded-full bg-[var(--studio-border-strong)]" />
+                      <span className="w-2 h-2 rounded-full bg-[var(--studio-border-strong)]" />
+                      <span className="w-2 h-2 rounded-full bg-[var(--studio-border-strong)]" />
                     </div>
                     {htmlPages.length > 1 ? (
                       <select
                         aria-label="Active preview HTML page"
                         value={entryHtmlPath}
                         onChange={(e) => onSwitchPreviewPage(e.target.value)}
-                        className="rounded-md bg-[#09090b] border border-white/[0.08] px-2 py-0.5 text-[12px] font-mono-tabular text-zinc-200 focus:outline-none focus:border-indigo-500"
+                        className="h-6 rounded-md bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2 text-[11.5px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
                       >
                         {htmlPages.map((p) => (
                           <option key={p} value={p}>
@@ -1811,34 +1808,34 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                         ))}
                       </select>
                     ) : (
-                      <span className="font-mono-tabular text-[12px] text-zinc-200 truncate">
+                      <span className="font-mono-tabular text-[11.5px] text-[var(--studio-text-strong)] truncate">
                         {entryHtmlPath}
                       </span>
                     )}
-                    <span className="font-mono-tabular text-[12px] text-zinc-500 truncate">
+                    <span className="font-mono-tabular text-[11.5px] text-[var(--studio-muted-soft)] truncate">
                       · {viewportLabel} · {frameSizeDisplay}
                     </span>
                     {canvasWidthPx !== null || canvasHeightPx !== null ? (
                       <button
                         type="button"
                         onClick={() => onResizeCanvasFrame(null, null)}
+                        aria-label="Reset size"
                         title="Reset custom canvas dimensions"
-                        className="text-[11px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer shrink-0"
+                        className="group inline-flex items-center h-5 px-1 rounded text-[11px] text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 hover:bg-indigo-500/10 cursor-pointer shrink-0"
                       >
-                        Reset size
+                        <RotateCcw className="w-3 h-3 shrink-0" strokeWidth={1.5} />
+                        <span className="studio-reveal-label">Reset size</span>
                       </button>
                     ) : null}
                   </div>
-                  <button
-                    type="button"
+                  <HoverIconButton
                     onClick={onRefreshPreview}
-                    aria-label="Reload preview"
+                    label="Reload"
+                    ariaLabel="Reload preview"
                     title="Reload preview"
-                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11.5px] font-medium text-zinc-300 hover:text-white hover:bg-[#27272a] transition-colors shrink-0 cursor-pointer"
-                  >
-                    <RefreshCw className="w-3 h-3" strokeWidth={1.5} />
-                    Reload
-                  </button>
+                    size="xs"
+                    icon={<RefreshCw className="w-3 h-3 text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]" strokeWidth={1.4} />}
+                  />
                 </div>
 
                 {/* Sandboxed Iframe + Selection/Move/Resize Overlay + Spacing Guides + Drag-Drop Target */}
@@ -1948,15 +1945,15 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                                 ? `x:${dragState.currentLeft} y:${dragState.currentTop}`
                                 : `${liveW} × ${liveH}${aspectRatioLocked ? ' · Locked' : ''}`}
                             </span>
-                            <div className="pointer-events-auto inline-flex items-center gap-0.5 rounded-lg bg-[#18181b]/95 border border-white/[0.1] p-0.5 shadow-xl shadow-black/50 studio-card-highlight">
+                            <div className="pointer-events-auto inline-flex items-center gap-0.5 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border-strong)] p-0.5 shadow-xl studio-card-highlight">
                               <button
                                 type="button"
                                 onPointerDown={startMove}
                                 aria-label="Move selected element"
                                 title="Drag to move element freely"
-                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10.5px] font-medium text-zinc-200 hover:bg-indigo-600 hover:text-white cursor-grab active:cursor-grabbing"
+                                className="inline-flex items-center gap-1 h-6 px-1.5 rounded-md text-[10.5px] font-medium text-[var(--studio-text-strong)] hover:bg-indigo-600 hover:text-white studio-pressable cursor-grab active:cursor-grabbing"
                               >
-                                <Move className="w-3 h-3" strokeWidth={1.5} />
+                                <Move className="w-3 h-3" strokeWidth={1.4} />
                                 Move
                               </button>
                               <button
@@ -1964,54 +1961,60 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                                 onClick={onSelectParent}
                                 aria-label="Select parent element"
                                 title="Select Parent Element"
-                                className="p-1 rounded-md text-zinc-300 hover:bg-[#27272a] hover:text-white cursor-pointer"
+                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
                               >
-                                <CornerLeftUp className="w-3 h-3" strokeWidth={1.5} />
+                                <CornerLeftUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                <span className="studio-reveal-label">Parent</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => onMoveSibling('up')}
                                 aria-label="Move element up"
                                 title="Move Up (Alt+↑)"
-                                className="p-1 rounded-md text-zinc-300 hover:bg-[#27272a] hover:text-white cursor-pointer"
+                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
                               >
-                                <ArrowUp className="w-3 h-3" strokeWidth={1.5} />
+                                <ArrowUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                <span className="studio-reveal-label">Up</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => onMoveSibling('down')}
                                 aria-label="Move element down"
                                 title="Move Down (Alt+↓)"
-                                className="p-1 rounded-md text-zinc-300 hover:bg-[#27272a] hover:text-white cursor-pointer"
+                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
                               >
-                                <ArrowDown className="w-3 h-3" strokeWidth={1.5} />
+                                <ArrowDown className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                <span className="studio-reveal-label">Down</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={onDuplicateSelected}
                                 aria-label="Floating duplicate element"
                                 title="Duplicate (Ctrl+D)"
-                                className="p-1 rounded-md text-zinc-300 hover:bg-[#27272a] hover:text-white cursor-pointer"
+                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
                               >
-                                <Copy className="w-3 h-3" strokeWidth={1.5} />
+                                <Copy className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                <span className="studio-reveal-label">Duplicate</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={onViewSelectedInCode}
                                 aria-label="View in code editor"
                                 title="View in Code"
-                                className="p-1 rounded-md text-cyan-300 hover:bg-[#27272a] hover:text-cyan-200 cursor-pointer"
+                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-cyan-700 dark:text-cyan-300 hover:bg-[var(--studio-hover)] studio-pressable cursor-pointer"
                               >
-                                <Code2 className="w-3 h-3" strokeWidth={1.5} />
+                                <Code2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                <span className="studio-reveal-label">Code</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={onRemoveSelected}
                                 aria-label="Floating delete element"
                                 title="Delete (Del)"
-                                className="p-1 rounded-md text-red-400 hover:bg-red-500/20 hover:text-red-300 cursor-pointer"
+                                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-red-600 dark:text-red-400 hover:bg-red-500/20 studio-pressable cursor-pointer"
                               >
-                                <Trash2 className="w-3 h-3" strokeWidth={1.5} />
+                                <Trash2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                                <span className="studio-reveal-label">Delete</span>
                               </button>
                             </div>
                           </div>
@@ -2036,11 +2039,11 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         </div>
       ) : (
         /* Code Editor Tab */
-        <div className="flex-1 min-h-0 flex flex-col bg-[#09090b]" data-code-editor="true">
+        <div className="flex-1 min-h-0 flex flex-col bg-[var(--studio-bg)]" data-code-editor="true">
           {activeFile ? (
             <>
-              <div className="h-9 shrink-0 px-4 border-b border-white/[0.08] bg-[#111114] flex items-center justify-between text-xs text-zinc-400">
-                <span className="font-mono-tabular text-[12px] text-zinc-200">
+              <div className="h-9 shrink-0 px-4 border-b border-[var(--studio-border)] bg-[var(--studio-surface)] flex items-center justify-between text-xs text-[var(--studio-muted)]">
+                <span className="font-mono-tabular text-[12px] text-[var(--studio-text-strong)]">
                   {activeFile.path}
                   {jumpToLine && jumpToLine.path === activeFile.path
                     ? ` · Line ${jumpToLine.line}${
@@ -2050,7 +2053,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                       }`
                     : ''}
                 </span>
-                <span className="text-[11.5px] text-zinc-500">
+                <span className="text-[11.5px] text-[var(--studio-muted-soft)]">
                   Changes sync automatically when switching back to Live Canvas
                 </span>
               </div>
@@ -2061,11 +2064,11 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 value={activeFile.content}
                 onChange={(e) => onUpdateCodeContent(activeFile.path, e.target.value)}
                 spellCheck={false}
-                className="flex-1 w-full p-4 bg-[#09090b] text-[#e4e4e7] font-mono-tabular text-[12.5px] leading-6 resize-none focus:outline-none builder-scroll"
+                className="flex-1 w-full p-4 bg-[var(--studio-bg)] text-[var(--studio-text)] font-mono-tabular text-[12.5px] leading-6 resize-none focus:outline-none builder-scroll"
               />
             </>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-xs text-zinc-500">
+            <div className="flex-1 flex items-center justify-center text-xs text-[var(--studio-muted-soft)]">
               Select a file from the explorer to inspect or edit its source code.
             </div>
           )}

@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { CanvasWorkspace } from './components/CanvasWorkspace';
+import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { FileExplorer } from './components/FileExplorer';
 import { RightStudioPanel } from './components/RightStudioPanel';
 import { ShortcutsModal } from './components/ShortcutsModal';
+import { StartHub } from './components/StartHub';
 import { TopToolbar } from './components/TopToolbar';
 import type {
   AutoSaveStatus,
@@ -19,6 +21,7 @@ import type {
   RightPanelTab,
   SelectedElementInfo,
   SeoMetaValues,
+  StudioThemeId,
   ViewportPreset,
 } from './types/editor';
 import { findElementSourceLocation, insertQuickComponentInProject } from './utils/codeSync';
@@ -29,12 +32,24 @@ import {
   clearWorkspaceStorage,
   type FileSystemDirectoryHandleLike,
   loadDefaultModePreference,
+  loadStudioThemePreference,
   loadWorkspaceFromStorage,
   requestWritableDirectoryHandle,
   saveDefaultModePreference,
+  saveStudioThemePreference,
   saveWorkspaceToStorage,
   writeProjectFilesToDirectory,
 } from './utils/fileSystemSync';
+import {
+  buildGoogleFontsHref,
+  collectUsedGoogleFonts,
+  ensureGoogleFontInHtml,
+} from './utils/fontLibrary';
+import {
+  computeFilesFingerprint,
+  type GitHubConnectionConfig,
+  mergeUpstreamFilesWithWorkspace,
+} from './utils/githubSync';
 import {
   cloneProjectFiles,
   createHistoryState,
@@ -50,6 +65,7 @@ import {
   duplicateElementInHtml,
   ensureElementNodeAttr,
   ensureStylesheetLinkInHtml,
+  extractElementHtmlByVeId,
   insertHtmlSnippet,
   moveElementSiblingInHtml,
   removeLastTableColumnInHtml,
@@ -67,12 +83,16 @@ import {
   type CompiledProjectBundle,
   detectFileType,
   detectProjectTitleFromUpload,
+  extractHotPatchPayload,
   findEntryHtmlPath,
+  isImageAssetPath,
   needsModuleBundling,
   normalizeUploadedFiles,
   shouldIgnoreUploadPath,
+  toSvgDataUrl,
 } from './utils/projectBundler';
 import {
+  applyRuntimeAttrPatchToFiles,
   applyRuntimeStylePatchToFiles,
   applyRuntimeTextPatchToFiles,
 } from './utils/reactVisualSync';
@@ -130,6 +150,7 @@ export default function App() {
     () => findEntryHtmlPath(startingFiles)
   );
 
+  const [studioTheme, setStudioTheme] = useState<StudioThemeId>(() => loadStudioThemePreference());
   const [defaultStartupMode, setDefaultStartupMode] = useState<EditorMode>(initialStartupMode);
   const [editorMode, setEditorMode] = useState<EditorMode>(initialStartupMode);
   const [viewport, setViewport] = useState<ViewportPreset>('desktop');
@@ -162,9 +183,35 @@ export default function App() {
   const [showOutlines, setShowOutlines] = useState(false);
   const [domTree, setDomTree] = useState<DomTreeNode[]>([]);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [showStartHub, setShowStartHub] = useState<boolean>(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('autostart') !== '1';
+    } catch {
+      return true;
+    }
+  });
   const [activeSpacingOverlay, setActiveSpacingOverlay] = useState<'margin' | 'padding' | null>(
     null
   );
+
+  // GitHub Sync state (token kept strictly in component state memory, never persisted)
+  const [githubOpen, setGithubOpen] = useState(false);
+  const [githubCommitModalOpen, setGithubCommitModalOpen] = useState(false);
+  const [githubConnection, setGithubConnection] = useState<GitHubConnectionConfig>({
+    repoUrl: '',
+    repoFullName: '',
+    branch: 'main',
+    autoSync: false,
+    lastSyncedAt: null,
+    lastCommitSha: undefined,
+    lastCommitUrl: undefined,
+  });
+  const [githubToken, setGithubToken] = useState('');
+  const [githubBusyAction, setGithubBusyAction] = useState<'pull' | 'push' | null>(null);
+  const [githubStatusError, setGithubStatusError] = useState<string | null>(null);
+  const [githubStatusMessage, setGithubStatusMessage] = useState<string | null>(null);
+  const [githubRequiresAuthPrompt, setGithubRequiresAuthPrompt] = useState(false);
 
   const [autoSaveStatus, setAutoSaveStatus] = useState<AutoSaveStatus>({
     enabled: true,
@@ -176,6 +223,8 @@ export default function App() {
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const diskHandleRef = useRef<FileSystemDirectoryHandleLike | null>(null);
+  const lastPushedFingerprintRef = useRef<string>('');
+  const copiedElementHtmlRef = useRef<{ html: string; tagName: string } | null>(null);
   const dropTargetRef = useRef<{
     targetVeId: string | null;
     placement: 'inside' | 'after';
@@ -184,6 +233,11 @@ export default function App() {
   const files = history.present.files;
   const htmlPages = useMemo(
     () => files.filter((f) => f.type === 'html').map((f) => f.path),
+    [files]
+  );
+
+  const projectImageAssets = useMemo(
+    () => files.filter((f) => isImageAssetPath(f.path)),
     [files]
   );
 
@@ -225,6 +279,13 @@ export default function App() {
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
   }, []);
+
+  useEffect(() => {
+    const isDark = studioTheme === 'obsidian' || studioTheme === 'slate';
+    document.documentElement.classList.toggle('dark', isDark);
+    document.documentElement.setAttribute('data-studio-theme', studioTheme);
+    saveStudioThemePreference(studioTheme);
+  }, [studioTheme]);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -286,6 +347,27 @@ export default function App() {
     };
   }, [splitDrag]);
 
+  const getStaticScriptSignature = useCallback(
+    (projectFiles: ProjectFile[], pagePath: string | null): string => {
+      if (!pagePath) return '';
+      const html = projectFiles.find((f) => f.path === pagePath)?.content ?? '';
+      const matches = html.match(/<script\b[^>]*>[\s\S]*?<\/script>/gi);
+      return matches ? matches.join('\n') : '';
+    },
+    []
+  );
+
+  const renderedPageRef = useRef<string | null>(findEntryHtmlPath(startingFiles));
+  const renderedScriptSigRef = useRef<string>(
+    getStaticScriptSignature(startingFiles, findEntryHtmlPath(startingFiles))
+  );
+
+  const postToIframe = useCallback((message: Record<string, unknown>) => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    win.postMessage({ target: 've-iframe', ...message }, '*');
+  }, []);
+
   const rebuildPreview = useCallback(
     (
       nextFiles: ProjectFile[],
@@ -301,10 +383,15 @@ export default function App() {
             : findEntryHtmlPath(nextFiles);
 
       if (!targetPage) {
+        renderedPageRef.current = null;
+        renderedScriptSigRef.current = '';
         setRenderedSrcDoc('');
         setPreviewKey((k) => k + 1);
         return;
       }
+
+      renderedPageRef.current = targetPage;
+      renderedScriptSigRef.current = getStaticScriptSignature(nextFiles, targetPage);
 
       const bridge = buildIframeBridgeMarkup(modeOverride, restoreVeId);
       const seq = ++bundleSeqRef.current;
@@ -334,7 +421,94 @@ export default function App() {
         }
       })();
     },
-    [editorMode, activePreviewHtmlPath, showToast]
+    [editorMode, activePreviewHtmlPath, getStaticScriptSignature, showToast]
+  );
+
+  const hotSyncIframe = useCallback(
+    (
+      nextFiles: ProjectFile[],
+      selectVeId: string | null = null,
+      pageOverride?: string | null,
+      prevFilesForDiff?: ProjectFile[]
+    ): boolean => {
+      const targetPage =
+        pageOverride && nextFiles.some((f) => f.path === pageOverride)
+          ? pageOverride
+          : activePreviewHtmlPath && nextFiles.some((f) => f.path === activePreviewHtmlPath)
+            ? activePreviewHtmlPath
+            : findEntryHtmlPath(nextFiles);
+
+      if (
+        !targetPage ||
+        showStartHub ||
+        centerTab !== 'preview' ||
+        !iframeRef.current?.contentWindow ||
+        targetPage !== renderedPageRef.current
+      ) {
+        rebuildPreview(nextFiles, editorMode, selectVeId, pageOverride);
+        return false;
+      }
+
+      if (!needsModuleBundling(nextFiles, targetPage)) {
+        const nextScriptSig = getStaticScriptSignature(nextFiles, targetPage);
+        if (nextScriptSig === renderedScriptSigRef.current) {
+          const payload = extractHotPatchPayload(nextFiles, targetPage);
+          if (payload) {
+            postToIframe({
+              type: 'HOT_PATCH_HTML',
+              ...payload,
+              selectVeId,
+            });
+            return true;
+          }
+        }
+        rebuildPreview(nextFiles, editorMode, selectVeId, pageOverride);
+        return false;
+      }
+
+      if (prevFilesForDiff) {
+        const prevNonOverride = prevFilesForDiff.filter(
+          (f) => f.path !== 'src/framecraft-edits.css' && f.path !== 'framecraft-edits.css'
+        );
+        const nextNonOverride = nextFiles.filter(
+          (f) => f.path !== 'src/framecraft-edits.css' && f.path !== 'framecraft-edits.css'
+        );
+        const onlyOverrideChanged =
+          prevNonOverride.length === nextNonOverride.length &&
+          prevNonOverride.every(
+            (pf, idx) =>
+              pf.path === nextNonOverride[idx].path && pf.content === nextNonOverride[idx].content
+          );
+        if (onlyOverrideChanged) {
+          const overrideCssFile =
+            nextFiles.find((f) => f.path === 'src/framecraft-edits.css') ??
+            nextFiles.find((f) => f.path === 'framecraft-edits.css');
+          const usedFamilies = collectUsedGoogleFonts(
+            nextFiles
+              .filter((f) => f.type === 'html' || f.type === 'css' || f.type === 'js')
+              .map((f) => f.content)
+          );
+          postToIframe({
+            type: 'HOT_PATCH_CSS',
+            overrideCss: overrideCssFile?.content ?? '',
+            googleFontHref: buildGoogleFontsHref(usedFamilies),
+          });
+          return true;
+        }
+      }
+
+      rebuildPreview(nextFiles, editorMode, selectVeId, pageOverride);
+      return false;
+    },
+    [
+      activePreviewHtmlPath,
+      showStartHub,
+      centerTab,
+      editorMode,
+      rebuildPreview,
+      getStaticScriptSignature,
+      postToIframe,
+    ]
   );
 
   // If restored workspace from localStorage uses TSX/ESM/Vite, bundle it on initial mount
@@ -345,12 +519,6 @@ export default function App() {
     }
     // Run once on initial mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const postToIframe = useCallback((message: Record<string, unknown>) => {
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    win.postMessage({ target: 've-iframe', ...message }, '*');
   }, []);
 
   const handleSwitchPreviewPage = useCallback(
@@ -453,6 +621,7 @@ export default function App() {
         const action = matchShortcutAction(
           {
             key: String(data.key || ''),
+            code: typeof data.code === 'string' ? data.code : undefined,
             ctrlKey: Boolean(data.ctrlKey),
             metaKey: Boolean(data.metaKey),
             shiftKey: Boolean(data.shiftKey),
@@ -461,7 +630,8 @@ export default function App() {
           {
             editorMode,
             hasSelectedElement: Boolean(selectedElement),
-            hasOpenModal: shortcutsModalOpen,
+            hasOpenModal:
+              shortcutsModalOpen || githubCommitModalOpen || commandPaletteOpen || showStartHub,
             isTyping: false,
           }
         );
@@ -636,12 +806,16 @@ export default function App() {
     editorMode,
     selectedElement,
     shortcutsModalOpen,
+    githubCommitModalOpen,
+    commandPaletteOpen,
+    showStartHub,
     showOutlines,
   ]);
 
   const applyPatchAndSync = useCallback(
     (patch: HtmlElementPatch, label: string, shouldRebuildAfter = false) => {
       if (!selectedElement) return;
+      const fontPatch = patch.styles?.['font-family'];
 
       if (!selectedElement.veId || !entryHtmlPath) {
         const sel = selectedElement.uniqueSelector || selectedElement.selectorPath;
@@ -649,6 +823,9 @@ export default function App() {
           let nextFiles = prevHistory.present.files;
           if (patch.styles && sel) {
             nextFiles = applyRuntimeStylePatchToFiles(nextFiles, sel, patch.styles);
+          }
+          if (patch.attributes && sel) {
+            nextFiles = applyRuntimeAttrPatchToFiles(nextFiles, sel, patch.attributes);
           }
           if (patch.textContent !== undefined) {
             const prevText = selectedOriginalTextRef.current || selectedElement.textContent;
@@ -663,6 +840,13 @@ export default function App() {
           if (patch.remove && sel) {
             nextFiles = applyRuntimeStylePatchToFiles(nextFiles, sel, { display: 'none' });
           }
+          if (fontPatch && entryHtmlPath) {
+            nextFiles = nextFiles.map((file) =>
+              file.path === entryHtmlPath
+                ? { ...file, content: ensureGoogleFontInHtml(file.content, fontPatch) }
+                : file
+            );
+          }
           return pushHistoryState(prevHistory, nextFiles, label);
         });
         if (shouldRebuildAfter) {
@@ -676,29 +860,37 @@ export default function App() {
       let updatedFilesSnapshot: ProjectFile[] | null = null;
 
       setHistory((prevHistory) => {
-        const nextFiles = prevHistory.present.files.map((file) =>
-          file.path === entryHtmlPath
-            ? {
-                ...file,
-                content: applyElementPatchToHtml(file.content, targetVeId, patch),
-              }
-            : file
-        );
+        const nextFiles = prevHistory.present.files.map((file) => {
+          if (file.path !== entryHtmlPath) return file;
+          let nextHtml = applyElementPatchToHtml(file.content, targetVeId, patch);
+          if (fontPatch) {
+            nextHtml = ensureGoogleFontInHtml(nextHtml, fontPatch);
+          }
+          return { ...file, content: nextHtml };
+        });
         updatedFilesSnapshot = nextFiles;
         return pushHistoryState(prevHistory, nextFiles, label);
       });
 
       if (shouldRebuildAfter && updatedFilesSnapshot) {
         setSelectedElement(null);
-        rebuildPreview(updatedFilesSnapshot, editorMode, null, entryHtmlPath);
+        hotSyncIframe(updatedFilesSnapshot, null, entryHtmlPath);
       }
     },
-    [selectedElement, entryHtmlPath, editorMode, rebuildPreview, postToIframe]
+    [selectedElement, entryHtmlPath, hotSyncIframe, postToIframe]
   );
 
   // Base inline style preview & commit
   const handlePreviewStyle = useCallback(
     (styles: Record<string, string>) => {
+      if (styles['font-family']) {
+        const googleFontHref = buildGoogleFontsHref(
+          collectUsedGoogleFonts([styles['font-family']])
+        );
+        if (googleFontHref) {
+          postToIframe({ type: 'HOT_PATCH_CSS', googleFontHref });
+        }
+      }
       postToIframe({ type: 'PREVIEW_STYLE', styles });
     },
     [postToIframe]
@@ -706,9 +898,17 @@ export default function App() {
 
   const handleCommitStyle = useCallback(
     (styles: Record<string, string | null>, label: string) => {
+      if (styles['font-family']) {
+        const googleFontHref = buildGoogleFontsHref(
+          collectUsedGoogleFonts([styles['font-family']])
+        );
+        if (googleFontHref) {
+          postToIframe({ type: 'HOT_PATCH_CSS', googleFontHref });
+        }
+      }
       applyPatchAndSync({ styles }, label, false);
     },
-    [applyPatchAndSync]
+    [applyPatchAndSync, postToIframe]
   );
 
   // Breakpoint-specific responsive CSS commit (Desktop / Tablet / Mobile)
@@ -933,9 +1133,9 @@ export default function App() {
       f.path === entryHtmlPath ? { ...f, content: updatedHtml } : f
     );
     setHistory((prev) => pushHistoryState(prev, nextFiles, 'Add table row'));
-    rebuildPreview(nextFiles, editorMode, selectedElement.veId, entryHtmlPath);
+    hotSyncIframe(nextFiles, selectedElement.veId, entryHtmlPath);
     showToast('Added table row');
-  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview, showToast]);
+  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, hotSyncIframe, showToast]);
 
   const handleRemoveTableRow = useCallback(() => {
     if (!selectedElement?.veId || !entryHtmlPath || !activeHtmlFile) return;
@@ -945,9 +1145,9 @@ export default function App() {
       f.path === entryHtmlPath ? { ...f, content: updatedHtml } : f
     );
     setHistory((prev) => pushHistoryState(prev, nextFiles, 'Remove table row'));
-    rebuildPreview(nextFiles, editorMode, selectedElement.veId, entryHtmlPath);
+    hotSyncIframe(nextFiles, selectedElement.veId, entryHtmlPath);
     showToast('Removed table row');
-  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview, showToast]);
+  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, hotSyncIframe, showToast]);
 
   const handleAddTableColumn = useCallback(() => {
     if (!selectedElement?.veId || !entryHtmlPath || !activeHtmlFile) return;
@@ -957,9 +1157,9 @@ export default function App() {
       f.path === entryHtmlPath ? { ...f, content: updatedHtml } : f
     );
     setHistory((prev) => pushHistoryState(prev, nextFiles, 'Add table column'));
-    rebuildPreview(nextFiles, editorMode, selectedElement.veId, entryHtmlPath);
+    hotSyncIframe(nextFiles, selectedElement.veId, entryHtmlPath);
     showToast('Added table column');
-  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview, showToast]);
+  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, hotSyncIframe, showToast]);
 
   const handleRemoveTableColumn = useCallback(() => {
     if (!selectedElement?.veId || !entryHtmlPath || !activeHtmlFile) return;
@@ -969,9 +1169,9 @@ export default function App() {
       f.path === entryHtmlPath ? { ...f, content: updatedHtml } : f
     );
     setHistory((prev) => pushHistoryState(prev, nextFiles, 'Remove table column'));
-    rebuildPreview(nextFiles, editorMode, selectedElement.veId, entryHtmlPath);
+    hotSyncIframe(nextFiles, selectedElement.veId, entryHtmlPath);
     showToast('Removed table column');
-  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview, showToast]);
+  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, hotSyncIframe, showToast]);
 
   const handleUpdateTableCellStyles = useCallback(
     (cellStyles: Record<string, string | null>, label: string) => {
@@ -986,9 +1186,9 @@ export default function App() {
         f.path === entryHtmlPath ? { ...f, content: updatedHtml } : f
       );
       setHistory((prev) => pushHistoryState(prev, nextFiles, label));
-      rebuildPreview(nextFiles, editorMode, selectedElement.veId, entryHtmlPath);
+      hotSyncIframe(nextFiles, selectedElement.veId, entryHtmlPath);
     },
-    [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview]
+    [selectedElement, entryHtmlPath, activeHtmlFile, files, hotSyncIframe]
   );
 
   const handleToggleTableStriped = useCallback(
@@ -1006,9 +1206,9 @@ export default function App() {
       setHistory((prev) =>
         pushHistoryState(prev, nextFiles, striped ? 'Enable striped rows' : 'Disable striped rows')
       );
-      rebuildPreview(nextFiles, editorMode, selectedElement.veId, entryHtmlPath);
+      hotSyncIframe(nextFiles, selectedElement.veId, entryHtmlPath);
     },
-    [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview]
+    [selectedElement, entryHtmlPath, activeHtmlFile, files, hotSyncIframe]
   );
 
   const handleDuplicateElement = useCallback(() => {
@@ -1019,9 +1219,9 @@ export default function App() {
       f.path === entryHtmlPath ? { ...f, content: dup.html } : f
     );
     setHistory((prev) => pushHistoryState(prev, nextFiles, 'Duplicate element'));
-    rebuildPreview(nextFiles, editorMode, dup.duplicatedVeId, entryHtmlPath);
+    hotSyncIframe(nextFiles, dup.duplicatedVeId, entryHtmlPath);
     showToast('Duplicated element');
-  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview, showToast]);
+  }, [selectedElement, entryHtmlPath, activeHtmlFile, files, hotSyncIframe, showToast]);
 
   const handleToggleFormatPainter = useCallback(() => {
     if (copiedFormat) {
@@ -1061,7 +1261,7 @@ export default function App() {
       );
       setHistory((prev) => pushHistoryState(prev, nextFiles, 'Remove element'));
       setSelectedElement(null);
-      rebuildPreview(nextFiles, editorMode, null, entryHtmlPath);
+      hotSyncIframe(nextFiles, null, entryHtmlPath);
       showToast('Element removed');
     } else {
       const sel = selectedElement.uniqueSelector || selectedElement.selectorPath;
@@ -1078,7 +1278,7 @@ export default function App() {
       setSelectedElement(null);
       showToast('Element removed');
     }
-  }, [selectedElement, entryHtmlPath, files, editorMode, rebuildPreview, postToIframe, showToast]);
+  }, [selectedElement, entryHtmlPath, files, hotSyncIframe, postToIframe, showToast]);
 
   const handleToggleVisibility = useCallback(() => {
     if (!selectedElement) return;
@@ -1185,11 +1385,12 @@ export default function App() {
       setCenterTab('preview');
       if (editorMode !== 'edit') {
         setEditorMode('edit');
+        postToIframe({ type: 'SET_MODE', mode: 'edit' });
       }
-      rebuildPreview(nextFiles, 'edit', inserted.insertedVeId, entryHtmlPath);
+      hotSyncIframe(nextFiles, inserted.insertedVeId, entryHtmlPath);
       showToast(`Inserted ${component.name}`);
     },
-    [entryHtmlPath, files, editorMode, rebuildPreview, showToast]
+    [entryHtmlPath, files, editorMode, hotSyncIframe, postToIframe, showToast]
   );
 
   const handleDropComponentOnCanvas = useCallback(
@@ -1270,11 +1471,11 @@ export default function App() {
         f.path === entryHtmlPath ? { ...f, content: res.html } : f
       );
       setHistory((prev) => pushHistoryState(prev, nextFiles, `Replace "${findText}"`));
-      rebuildPreview(nextFiles, editorMode, selectedElement?.veId ?? null, entryHtmlPath);
+      hotSyncIframe(nextFiles, selectedElement?.veId ?? null, entryHtmlPath);
       showToast(`Replaced ${res.count} occurrence${res.count === 1 ? '' : 's'}`);
       return res.count;
     },
-    [entryHtmlPath, activeHtmlFile, files, editorMode, selectedElement?.veId, rebuildPreview, showToast]
+    [entryHtmlPath, activeHtmlFile, files, selectedElement?.veId, hotSyncIframe, showToast]
   );
 
   // Grant read/write folder permission via File System Access API
@@ -1333,14 +1534,14 @@ export default function App() {
         setHistory((prev) =>
           pushHistoryState(prev, nextFiles, direction === 'up' ? 'Move element up' : 'Move element down')
         );
-        rebuildPreview(nextFiles, editorMode, res.nextVeId ?? selectedElement.veId, entryHtmlPath);
+        hotSyncIframe(nextFiles, res.nextVeId ?? selectedElement.veId, entryHtmlPath);
         showToast(direction === 'up' ? 'Moved element up' : 'Moved element down');
         return;
       }
       postToIframe({ type: 'MOVE_SIBLING', direction });
       showToast(direction === 'up' ? 'Moved element up' : 'Moved element down');
     },
-    [selectedElement, entryHtmlPath, activeHtmlFile, files, editorMode, rebuildPreview, postToIframe, showToast]
+    [selectedElement, entryHtmlPath, activeHtmlFile, files, hotSyncIframe, postToIframe, showToast]
   );
 
   const handleViewSelectedInCode = useCallback(() => {
@@ -1377,37 +1578,211 @@ export default function App() {
       setCenterTab('preview');
       if (editorMode !== 'edit') {
         setEditorMode('edit');
+        postToIframe({ type: 'SET_MODE', mode: 'edit' });
       }
-      rebuildPreview(result.files, 'edit', result.insertedVeId, entryHtmlPath);
+      hotSyncIframe(result.files, result.insertedVeId, entryHtmlPath);
       showToast(`Inserted ${kind} into ${result.targetPath}`);
     },
-    [files, entryHtmlPath, selectedElement, editorMode, rebuildPreview, showToast]
+    [files, entryHtmlPath, selectedElement, editorMode, hotSyncIframe, postToIframe, showToast]
   );
 
-  // Undo & Redo
+  const handleNudgeSelected = useCallback(
+    (dx: number, dy: number) => {
+      if (!selectedElement || editorMode !== 'edit') return;
+      const curPos =
+        selectedElement.inlineStyles.position || selectedElement.styles.position || 'static';
+      const nextPos = curPos === 'static' || !curPos ? 'relative' : curPos;
+      const rawLeft = selectedElement.inlineStyles.left || selectedElement.styles.left || '0px';
+      const rawTop = selectedElement.inlineStyles.top || selectedElement.styles.top || '0px';
+      const curLeft = Number.isFinite(parseFloat(rawLeft)) ? parseFloat(rawLeft) : 0;
+      const curTop = Number.isFinite(parseFloat(rawTop)) ? parseFloat(rawTop) : 0;
+      const nextLeft = `${Math.round(curLeft + dx)}px`;
+      const nextTop = `${Math.round(curTop + dy)}px`;
+
+      setSelectedElement((prev) =>
+        prev
+          ? {
+              ...prev,
+              inlineStyles: {
+                ...prev.inlineStyles,
+                position: nextPos,
+                left: nextLeft,
+                top: nextTop,
+              },
+            }
+          : prev
+      );
+
+      handleCommitFormattingStyle(
+        {
+          position: nextPos,
+          left: nextLeft,
+          top: nextTop,
+        },
+        `Nudge (${dx >= 0 ? `+${dx}` : dx}, ${dy >= 0 ? `+${dy}` : dy})`
+      );
+    },
+    [selectedElement, editorMode, handleCommitFormattingStyle]
+  );
+
+  const handleCopyElement = useCallback(() => {
+    if (!selectedElement?.veId || !activeHtmlFile) {
+      showToast('Select a static HTML element to copy');
+      return;
+    }
+    const snippet = extractElementHtmlByVeId(activeHtmlFile.content, selectedElement.veId);
+    if (!snippet) return;
+    copiedElementHtmlRef.current = { html: snippet, tagName: selectedElement.tagName };
+    showToast(`Copied <${selectedElement.tagName}>`);
+  }, [selectedElement, activeHtmlFile, showToast]);
+
+  const handleCutElement = useCallback(() => {
+    if (!selectedElement?.veId || !activeHtmlFile) return;
+    const snippet = extractElementHtmlByVeId(activeHtmlFile.content, selectedElement.veId);
+    if (!snippet) return;
+    const tagName = selectedElement.tagName;
+    copiedElementHtmlRef.current = { html: snippet, tagName };
+    handleRemoveElement();
+    showToast(`Cut <${tagName}>`);
+  }, [selectedElement, activeHtmlFile, handleRemoveElement, showToast]);
+
+  const handlePasteElement = useCallback(() => {
+    if (!copiedElementHtmlRef.current) {
+      showToast('Clipboard empty — select an element and press Ctrl+C first');
+      return;
+    }
+    const targetVeId = selectedElement?.veId ?? null;
+    const placement =
+      selectedElement && CONTAINER_TAGS.has(selectedElement.tagName) ? 'inside' : 'after';
+    insertComponentIntoHtml(
+      {
+        id: `clipboard-${Date.now()}`,
+        name: `<${copiedElementHtmlRef.current.tagName}>`,
+        category: 'Components',
+        description: 'Pasted element',
+        html: copiedElementHtmlRef.current.html,
+      },
+      targetVeId,
+      targetVeId ? placement : 'inside'
+    );
+  }, [selectedElement, insertComponentIntoHtml, showToast]);
+
+  const handleCopyStyleOnly = useCallback(() => {
+    if (!selectedElement) return;
+    const snapshot: Record<string, string | null> = {
+      'font-family':
+        selectedElement.inlineStyles['font-family'] || selectedElement.styles.fontFamily || null,
+      'font-size':
+        selectedElement.inlineStyles['font-size'] || selectedElement.styles.fontSize || null,
+      'font-weight':
+        selectedElement.inlineStyles['font-weight'] || selectedElement.styles.fontWeight || null,
+      'font-style':
+        selectedElement.inlineStyles['font-style'] || selectedElement.styles.fontStyle || null,
+      'text-decoration': selectedElement.inlineStyles['text-decoration'] || null,
+      color: selectedElement.inlineStyles.color || selectedElement.styles.color || null,
+      'background-color': selectedElement.inlineStyles['background-color'] || null,
+      'border-radius': selectedElement.inlineStyles['border-radius'] || null,
+      padding: selectedElement.inlineStyles.padding || null,
+      'text-align': selectedElement.inlineStyles['text-align'] || null,
+    };
+    setCopiedFormat(snapshot);
+    showToast('Copied styles (Ctrl+Shift+V to paste)');
+  }, [selectedElement, showToast]);
+
+  const handlePasteStyleOnly = useCallback(() => {
+    if (!copiedFormat) {
+      showToast('No copied styles — press Ctrl+Shift+C on an element first');
+      return;
+    }
+    if (!selectedElement) {
+      showToast('Select an element to paste styles onto');
+      return;
+    }
+    handleCommitFormattingStyle(copiedFormat, 'Paste style');
+    showToast('Pasted styles');
+  }, [copiedFormat, selectedElement, handleCommitFormattingStyle, showToast]);
+
+  const handleShiftZIndex = useCallback(
+    (delta: number) => {
+      if (!selectedElement || editorMode !== 'edit') return;
+      const curPos =
+        selectedElement.inlineStyles.position || selectedElement.styles.position || 'static';
+      const nextPos = curPos === 'static' || !curPos ? 'relative' : curPos;
+      const rawZ = selectedElement.inlineStyles['z-index'] || selectedElement.styles.zIndex || '0';
+      const curZ = Number.isFinite(parseInt(rawZ, 10)) ? parseInt(rawZ, 10) : 0;
+      const nextZ = String(curZ + delta);
+      handleCommitFormattingStyle(
+        { position: nextPos, 'z-index': nextZ },
+        delta > 0 ? 'Bring forward' : 'Send backward'
+      );
+      showToast(`Layer z-index: ${nextZ}`);
+    },
+    [selectedElement, editorMode, handleCommitFormattingStyle, showToast]
+  );
+
+  // Undo & Redo (zero-reload DOM/CSS hot-patch when page structure permits)
   const handleUndo = useCallback(() => {
     if (history.past.length === 0) return;
     const nextState = undoHistoryState(history);
     setHistory(nextState);
     const keepVeId = selectedElement?.veId ?? null;
-    setSelectedElement(null);
-    rebuildPreview(nextState.present.files, editorMode, keepVeId);
+    const didHotPatch = hotSyncIframe(
+      nextState.present.files,
+      keepVeId,
+      undefined,
+      history.present.files
+    );
+    if (!didHotPatch) {
+      setSelectedElement(null);
+    }
     showToast(`Undid: ${history.present.label}`);
-  }, [history, selectedElement, editorMode, rebuildPreview, showToast]);
+  }, [history, selectedElement, hotSyncIframe, showToast]);
 
   const handleRedo = useCallback(() => {
     if (history.future.length === 0) return;
     const nextState = redoHistoryState(history);
     setHistory(nextState);
     const keepVeId = selectedElement?.veId ?? null;
-    setSelectedElement(null);
-    rebuildPreview(nextState.present.files, editorMode, keepVeId);
+    const didHotPatch = hotSyncIframe(
+      nextState.present.files,
+      keepVeId,
+      undefined,
+      history.present.files
+    );
+    if (!didHotPatch) {
+      setSelectedElement(null);
+    }
     showToast(`Redid: ${nextState.present.label}`);
-  }, [history, selectedElement, editorMode, rebuildPreview, showToast]);
+  }, [history, selectedElement, hotSyncIframe, showToast]);
+
+  const handleToggleZenMode = useCallback(() => {
+    const nextZen = !(leftSidebarCollapsed && rightSidebarCollapsed);
+    setLeftSidebarCollapsed(nextZen);
+    setRightSidebarCollapsed(nextZen);
+    window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+    showToast(nextZen ? 'Zen Focus Mode' : 'Panels restored');
+  }, [leftSidebarCollapsed, rightSidebarCollapsed, postToIframe, showToast]);
+
+  const handleStepZoom = useCallback(
+    (dir: 'in' | 'out') => {
+      const steps: CanvasZoomMode[] = ['50', '75', '100'];
+      setCanvasZoom((prev) => {
+        if (prev === 'fit') return dir === 'in' ? '100' : '75';
+        const idx = steps.indexOf(prev);
+        if (idx === -1) return '100';
+        const nextIdx = Math.max(0, Math.min(steps.length - 1, idx + (dir === 'in' ? 1 : -1)));
+        return steps[nextIdx];
+      });
+    },
+    []
+  );
 
   const executeShortcutAction = useCallback(
     (action: ShortcutAction) => {
       switch (action) {
+        case 'open-command-palette':
+          setCommandPaletteOpen((prev) => !prev);
+          break;
         case 'undo':
           handleUndo();
           break;
@@ -1420,6 +1795,15 @@ export default function App() {
         case 'toggle-mode':
           handleChangeMode(editorMode === 'edit' ? 'interact' : 'edit');
           break;
+        case 'mode-edit':
+          if (editorMode !== 'edit') {
+            handleChangeMode('edit');
+          }
+          showToast('Editing Mode');
+          break;
+        case 'toggle-outlines':
+          handleToggleOutlines();
+          break;
         case 'toggle-left-sidebar':
           setLeftSidebarCollapsed((prev) => !prev);
           window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
@@ -1428,8 +1812,26 @@ export default function App() {
           setRightSidebarCollapsed((prev) => !prev);
           window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
           break;
+        case 'toggle-zen':
+          handleToggleZenMode();
+          break;
         case 'duplicate':
           if (editorMode === 'edit' && selectedElement) handleDuplicateElement();
+          break;
+        case 'copy-element':
+          if (editorMode === 'edit' && selectedElement) handleCopyElement();
+          break;
+        case 'cut-element':
+          if (editorMode === 'edit' && selectedElement) handleCutElement();
+          break;
+        case 'paste-element':
+          if (editorMode === 'edit') handlePasteElement();
+          break;
+        case 'copy-style':
+          if (editorMode === 'edit' && selectedElement) handleCopyStyleOnly();
+          break;
+        case 'paste-style':
+          if (editorMode === 'edit' && selectedElement) handlePasteStyleOnly();
           break;
         case 'delete':
           if (editorMode === 'edit' && selectedElement) handleRemoveElement();
@@ -1439,6 +1841,89 @@ export default function App() {
           break;
         case 'move-down':
           if (editorMode === 'edit' && selectedElement) handleMoveElementSibling('down');
+          break;
+        case 'bring-forward':
+          if (editorMode === 'edit' && selectedElement) handleShiftZIndex(1);
+          break;
+        case 'send-backward':
+          if (editorMode === 'edit' && selectedElement) handleShiftZIndex(-1);
+          break;
+        case 'nudge-up':
+          handleNudgeSelected(0, -1);
+          break;
+        case 'nudge-down':
+          handleNudgeSelected(0, 1);
+          break;
+        case 'nudge-left':
+          handleNudgeSelected(-1, 0);
+          break;
+        case 'nudge-right':
+          handleNudgeSelected(1, 0);
+          break;
+        case 'nudge-up-10':
+          handleNudgeSelected(0, -10);
+          break;
+        case 'nudge-down-10':
+          handleNudgeSelected(0, 10);
+          break;
+        case 'nudge-left-10':
+          handleNudgeSelected(-10, 0);
+          break;
+        case 'nudge-right-10':
+          handleNudgeSelected(10, 0);
+          break;
+        case 'toggle-visibility':
+          if (editorMode === 'edit' && selectedElement) handleToggleVisibility();
+          break;
+        case 'toggle-aspect-lock':
+          if (editorMode === 'edit' && selectedElement) {
+            handleToggleAspectRatioLock(!selectedAspectRatioLocked);
+          }
+          break;
+        case 'edit-text':
+          if (editorMode === 'edit' && selectedElement) {
+            postToIframe({ type: 'START_INLINE_EDIT' });
+          }
+          break;
+        case 'select-parent':
+          if (editorMode === 'edit' && selectedElement) handleSelectParent();
+          break;
+        case 'format-underline':
+          if (editorMode === 'edit' && selectedElement) {
+            const cur =
+              selectedElement.inlineStyles['text-decoration'] ||
+              selectedElement.styles.textDecoration ||
+              '';
+            const next = cur.includes('underline') ? 'none' : 'underline';
+            handleCommitFormattingStyle({ 'text-decoration': next }, 'Toggle underline');
+          }
+          break;
+        case 'align-left':
+          if (editorMode === 'edit' && selectedElement) {
+            handleCommitFormattingStyle({ 'text-align': 'left' }, 'Align left');
+          }
+          break;
+        case 'align-center':
+          if (editorMode === 'edit' && selectedElement) {
+            handleCommitFormattingStyle({ 'text-align': 'center' }, 'Align center');
+          }
+          break;
+        case 'align-right':
+          if (editorMode === 'edit' && selectedElement) {
+            handleCommitFormattingStyle({ 'text-align': 'right' }, 'Align right');
+          }
+          break;
+        case 'zoom-in':
+          handleStepZoom('in');
+          break;
+        case 'zoom-out':
+          handleStepZoom('out');
+          break;
+        case 'zoom-100':
+          setCanvasZoom('100');
+          break;
+        case 'zoom-fit':
+          setCanvasZoom('fit');
           break;
         case 'viewport-desktop':
           handleChangeViewport('desktop');
@@ -1453,7 +1938,11 @@ export default function App() {
           setShortcutsModalOpen((prev) => !prev);
           break;
         case 'escape':
-          if (shortcutsModalOpen) {
+          if (commandPaletteOpen) {
+            setCommandPaletteOpen(false);
+          } else if (githubCommitModalOpen) {
+            setGithubCommitModalOpen(false);
+          } else if (shortcutsModalOpen) {
             setShortcutsModalOpen(false);
           } else if (selectedElement) {
             setCopiedFormat(null);
@@ -1468,14 +1957,32 @@ export default function App() {
       handleRedo,
       handleManualSave,
       handleChangeMode,
+      handleToggleOutlines,
+      handleToggleZenMode,
       editorMode,
       selectedElement,
       handleDuplicateElement,
+      handleCopyElement,
+      handleCutElement,
+      handlePasteElement,
+      handleCopyStyleOnly,
+      handlePasteStyleOnly,
       handleRemoveElement,
       handleMoveElementSibling,
+      handleShiftZIndex,
+      handleNudgeSelected,
+      handleToggleVisibility,
+      handleToggleAspectRatioLock,
+      selectedAspectRatioLocked,
+      handleSelectParent,
+      handleCommitFormattingStyle,
+      handleStepZoom,
       handleChangeViewport,
+      commandPaletteOpen,
+      githubCommitModalOpen,
       shortcutsModalOpen,
       postToIframe,
+      showToast,
     ]
   );
 
@@ -1496,18 +2003,35 @@ export default function App() {
         {
           editorMode,
           hasSelectedElement: Boolean(selectedElement),
-          hasOpenModal: shortcutsModalOpen,
+          hasOpenModal:
+            shortcutsModalOpen || githubCommitModalOpen || commandPaletteOpen || showStartHub,
           isTyping: isShortcutTypingTarget(e.target),
         }
       );
       if (!action) return;
+      if (
+        showStartHub &&
+        action !== 'escape' &&
+        action !== 'open-shortcuts' &&
+        action !== 'open-command-palette'
+      ) {
+        return;
+      }
       e.preventDefault();
       executeShortcutAction(action);
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [editorMode, selectedElement, shortcutsModalOpen, executeShortcutAction]);
+  }, [
+    editorMode,
+    selectedElement,
+    shortcutsModalOpen,
+    githubCommitModalOpen,
+    commandPaletteOpen,
+    showStartHub,
+    executeShortcutAction,
+  ]);
 
   const handleLoadTemplate = useCallback(
     (templateId: string) => {
@@ -1523,6 +2047,7 @@ export default function App() {
       setActivePreviewHtmlPath(nextEntry);
       setSelectedElement(null);
       setCenterTab('preview');
+      setShowStartHub(false);
       codeDirtyRef.current = false;
       rebuildPreview(cloned, editorMode, null, nextEntry);
       showToast(`Loaded ${tpl.name}`);
@@ -1550,6 +2075,7 @@ export default function App() {
         'jpeg',
         'gif',
         'webp',
+        'bmp',
         'avif',
         'ico',
         'woff',
@@ -1578,17 +2104,30 @@ export default function App() {
           reader.readAsDataURL(file);
         });
 
-      const rawEntries: Array<{ path: string; name: string; content: string }> = [];
+      const rawEntries: Array<{
+        path: string;
+        name: string;
+        content: string;
+        blobUrl?: string;
+      }> = [];
 
       for (const file of Array.from(fileList)) {
         const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
         if (shouldIgnoreUploadPath(rel)) continue;
         const lowerName = file.name.toLowerCase();
         const ext = lowerName.includes('.') ? lowerName.split('.').pop() ?? '' : '';
-        const content = binaryExtensions.has(ext)
-          ? await readAsDataUrl(file)
-          : await file.text();
-        rawEntries.push({ path: rel, name: file.name, content });
+        if (binaryExtensions.has(ext)) {
+          const blobUrl = URL.createObjectURL(file);
+          const content = await readAsDataUrl(file);
+          rawEntries.push({ path: rel, name: file.name, content, blobUrl });
+        } else if (ext === 'svg') {
+          const content = await file.text();
+          const blobUrl = URL.createObjectURL(new Blob([content], { type: 'image/svg+xml' }));
+          rawEntries.push({ path: rel, name: file.name, content, blobUrl });
+        } else {
+          const content = await file.text();
+          rawEntries.push({ path: rel, name: file.name, content });
+        }
       }
 
       if (rawEntries.length === 0) {
@@ -1607,6 +2146,7 @@ export default function App() {
       setActivePreviewHtmlPath(nextEntry);
       setSelectedElement(null);
       setCenterTab('preview');
+      setShowStartHub(false);
       codeDirtyRef.current = false;
       rebuildPreview(normalized, editorMode, null, nextEntry);
       if (!nextEntry) {
@@ -1619,6 +2159,311 @@ export default function App() {
     },
     [editorMode, rebuildPreview, showToast]
   );
+
+  const handleUploadImageAsset = useCallback(
+    async (file: File): Promise<string | null> => {
+      const safeName = (file.name || 'image.png').replace(/[^\w.-]+/g, '-');
+      const isSvg = /\.svg$/i.test(safeName);
+      const hasPublicDir = files.some((f) => f.path.toLowerCase().startsWith('public/'));
+      const usesBundler = needsModuleBundling(files, entryHtmlPath);
+      const usePublicFolder = hasPublicDir || usesBundler;
+
+      const targetDir = usePublicFolder
+        ? 'public/images'
+        : files.some((f) => f.path.toLowerCase().startsWith('assets/'))
+          ? 'assets'
+          : 'images';
+      const targetPath = `${targetDir}/${safeName}`;
+      const assetUrl = usePublicFolder ? `/images/${safeName}` : `./${targetPath}`;
+
+      let content = '';
+      let blobUrl = '';
+      if (isSvg) {
+        content = await file.text();
+        blobUrl = URL.createObjectURL(new Blob([content], { type: 'image/svg+xml' }));
+      } else {
+        blobUrl = URL.createObjectURL(file);
+        content = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+          reader.onerror = () => reject(reader.error || new Error('Failed to read image file'));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      if (!content) return null;
+
+      const sandboxUrl = isSvg ? toSvgDataUrl(content) : content;
+      const newAsset: ProjectFile = {
+        path: targetPath,
+        name: safeName,
+        type: 'other',
+        content,
+        blobUrl,
+      };
+
+      setHistory((prev) => {
+        const filtered = prev.present.files.filter((f) => f.path !== targetPath);
+        const nextFiles = [...filtered, newAsset].sort((a, b) => a.path.localeCompare(b.path));
+        return pushHistoryState(prev, nextFiles, `Add image ${targetPath}`);
+      });
+
+      postToIframe({
+        type: 'REGISTER_PROJECT_ASSET',
+        keys: [targetPath, `./${targetPath}`, `/${targetPath}`, assetUrl, `.${assetUrl}`, safeName],
+        url: sandboxUrl,
+      });
+
+      showToast(`Added ${targetPath}`);
+      return assetUrl;
+    },
+    [files, entryHtmlPath, postToIframe, showToast]
+  );
+
+  // Pull & Push integration with GitHub repository URL (no API key required for public pulls)
+  const handlePullFromGitHub = useCallback(
+    async (repoUrl: string, branch: string, token: string): Promise<boolean> => {
+      setGithubBusyAction('pull');
+      setGithubStatusError(null);
+      setGithubStatusMessage(null);
+      try {
+        const res = await fetch('/api/github/pull', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repoUrl, branch, token }),
+        });
+        const data = (await res.json()) as {
+          error?: string;
+          requiresAuth?: boolean;
+          repoFullName?: string;
+          branch?: string;
+          files?: Array<{ path: string; name: string; content: string }>;
+        };
+
+        if (!res.ok || !data.files) {
+          if (data.requiresAuth) {
+            setGithubRequiresAuthPrompt(true);
+          }
+          setGithubStatusError(data.error || 'Failed to pull from GitHub repository');
+          return false;
+        }
+
+        const pulledEntries = data.files.map((entry) => ({
+          path: entry.path,
+          name: entry.name,
+          content: entry.content,
+        }));
+        const normalized = normalizeUploadedFiles(pulledEntries);
+        if (normalized.length === 0) {
+          setGithubStatusError('Repository archive did not contain any supported web files.');
+          return false;
+        }
+
+        const resolvedBranch = data.branch || branch || 'main';
+        const resolvedRepoName = data.repoFullName || repoUrl;
+        const isSameConnectedRepo =
+          Boolean(githubConnection.repoFullName) &&
+          githubConnection.repoFullName.toLowerCase() === resolvedRepoName.toLowerCase();
+
+        const mergeOutcome = isSameConnectedRepo
+          ? mergeUpstreamFilesWithWorkspace(files, normalized)
+          : null;
+        const workspaceFiles = mergeOutcome ? mergeOutcome.merged : normalized;
+
+        const nextEntry = findEntryHtmlPath(workspaceFiles);
+        const repoShortTitle =
+          resolvedRepoName.split('/').pop() ||
+          detectProjectTitleFromUpload(pulledEntries, workspaceFiles) ||
+          'GitHub Project';
+
+        setInitialFiles(cloneProjectFiles(workspaceFiles));
+        if (mergeOutcome) {
+          setHistory((prev) => pushHistoryState(prev, workspaceFiles, `Pull ${resolvedRepoName}`));
+        } else {
+          setHistory(createHistoryState(workspaceFiles, `Pulled ${resolvedRepoName}`));
+        }
+        setProjectName(repoShortTitle);
+        setActiveTemplateId(null);
+        setActiveFilePath((prevPath) =>
+          prevPath && workspaceFiles.some((f) => f.path === prevPath)
+            ? prevPath
+            : nextEntry ?? workspaceFiles[0]?.path ?? null
+        );
+        setActivePreviewHtmlPath(nextEntry);
+        setSelectedElement(null);
+        setCenterTab('preview');
+        setShowStartHub(false);
+        codeDirtyRef.current = false;
+        rebuildPreview(workspaceFiles, editorMode, null, nextEntry);
+
+        lastPushedFingerprintRef.current = computeFilesFingerprint(workspaceFiles);
+        setGithubRequiresAuthPrompt(false);
+        setGithubConnection((prev) => ({
+          ...prev,
+          repoUrl,
+          repoFullName: resolvedRepoName,
+          branch: resolvedBranch,
+          lastSyncedAt: Date.now(),
+        }));
+        const pullSummary = mergeOutcome
+          ? `Merged ${mergeOutcome.updatedCount} upstream files${
+              mergeOutcome.preservedLocalCount > 0
+                ? ` (+${mergeOutcome.preservedLocalCount} local kept)`
+                : ''
+            } from ${resolvedRepoName} (${resolvedBranch})`
+          : `Pulled ${normalized.length} files from ${resolvedRepoName} (${resolvedBranch})`;
+        setGithubStatusMessage(pullSummary);
+        showToast(pullSummary);
+        return true;
+      } catch (err) {
+        setGithubStatusError(
+          err instanceof Error ? err.message : 'Network error pulling repository'
+        );
+        return false;
+      } finally {
+        setGithubBusyAction(null);
+      }
+    },
+    [editorMode, files, githubConnection.repoFullName, rebuildPreview, showToast]
+  );
+
+  const handlePushToGitHub = useCallback(
+    async (
+      repoUrl: string,
+      branch: string,
+      commitMessage: string,
+      token: string,
+      silent = false
+    ): Promise<boolean> => {
+      if (!silent) {
+        setGithubBusyAction('push');
+        setGithubStatusError(null);
+        setGithubStatusMessage(null);
+      }
+      try {
+        const res = await fetch('/api/github/push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            repoUrl,
+            branch,
+            commitMessage,
+            token,
+            files: files.map(({ path, name, content, type }) => ({
+              path,
+              name,
+              content,
+              type,
+            })),
+          }),
+        });
+        const data = (await res.json()) as {
+          error?: string;
+          requiresAuth?: boolean;
+          repoFullName?: string;
+          branch?: string;
+          commitSha?: string;
+          commitUrl?: string;
+          filesCommitted?: number;
+        };
+
+        if (!res.ok) {
+          if (data.requiresAuth) {
+            setGithubRequiresAuthPrompt(true);
+            if (silent) {
+              setGithubOpen(true);
+            }
+          }
+          setGithubStatusError(data.error || 'Failed to push commit to GitHub');
+          return false;
+        }
+
+        const resolvedRepoName = data.repoFullName || repoUrl;
+        const resolvedBranch = data.branch || branch || 'main';
+        lastPushedFingerprintRef.current = computeFilesFingerprint(files);
+        setGithubRequiresAuthPrompt(false);
+        setGithubConnection((prev) => ({
+          ...prev,
+          repoUrl,
+          repoFullName: resolvedRepoName,
+          branch: resolvedBranch,
+          lastSyncedAt: Date.now(),
+          lastCommitSha: data.commitSha || prev.lastCommitSha,
+          lastCommitUrl: data.commitUrl || prev.lastCommitUrl,
+        }));
+        const okMsg = `Pushed commit ${data.commitSha?.slice(0, 7) || ''} to ${resolvedRepoName} (${resolvedBranch})`;
+        setGithubStatusMessage(okMsg);
+        showToast(silent ? 'Synced edits to GitHub' : okMsg);
+        return true;
+      } catch (err) {
+        setGithubStatusError(
+          err instanceof Error ? err.message : 'Network error pushing to GitHub'
+        );
+        return false;
+      } finally {
+        if (!silent) {
+          setGithubBusyAction(null);
+        }
+      }
+    },
+    [files, showToast]
+  );
+
+  const handleToggleGithubAutoSync = useCallback(
+    (enabled: boolean, repoUrl: string, branch: string) => {
+      setGithubConnection((prev) => ({
+        ...prev,
+        repoUrl: repoUrl || prev.repoUrl,
+        branch: branch || prev.branch,
+        autoSync: enabled,
+      }));
+      if (enabled && !githubToken.trim()) {
+        setGithubRequiresAuthPrompt(true);
+        setGithubStatusError(
+          'Enter a GitHub push token in the optional section below so instant auto-sync can push commits.'
+        );
+      } else {
+        setGithubStatusError(null);
+      }
+    },
+    [githubToken]
+  );
+
+  useEffect(() => {
+    if (!githubConnection.autoSync || !githubConnection.repoUrl.trim() || !githubToken.trim()) {
+      return;
+    }
+    const nextFp = computeFilesFingerprint(files);
+    if (!lastPushedFingerprintRef.current) {
+      lastPushedFingerprintRef.current = nextFp;
+      return;
+    }
+    if (nextFp === lastPushedFingerprintRef.current) return;
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const ok = await handlePushToGitHub(
+          githubConnection.repoUrl,
+          githubConnection.branch,
+          'Auto-sync Framecraft edits',
+          githubToken,
+          true
+        );
+        if (!ok) {
+          setGithubConnection((prev) => ({ ...prev, autoSync: false }));
+        }
+      })();
+    }, 1800);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    files,
+    githubConnection.autoSync,
+    githubConnection.repoUrl,
+    githubConnection.branch,
+    githubToken,
+    handlePushToGitHub,
+  ]);
 
   const handleCreateFile = useCallback(
     (filename: string) => {
@@ -1684,32 +2529,73 @@ export default function App() {
   );
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col bg-[#09090b] text-[#e4e4e7]">
-      <TopToolbar
-        projectName={projectName}
-        editorMode={editorMode}
-        onChangeMode={handleChangeMode}
-        viewport={viewport}
-        onChangeViewport={handleChangeViewport}
-        canUndo={history.past.length > 0}
-        canRedo={history.future.length > 0}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        onSaveProject={() => void handleManualSave()}
-        onResetProject={handleResetProject}
-        onExportZip={handleExportZip}
-        onUploadFiles={handleUploadFiles}
-        autoSaveStatus={autoSaveStatus}
-        onConnectDiskFolder={handleConnectDiskFolder}
-        onOpenShortcuts={() => setShortcutsModalOpen(true)}
-      />
+    <div className="relative h-screen w-screen overflow-hidden flex flex-col bg-[var(--studio-bg)] text-[var(--studio-text-strong)]">
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 studio-grain" />
 
-      <div className="flex-1 min-h-0 flex relative">
+      {showStartHub ? (
+        <StartHub
+          templates={SAMPLE_TEMPLATES}
+          currentProjectName={projectName}
+          currentFileCount={files.length}
+          studioTheme={studioTheme}
+          onChangeStudioTheme={setStudioTheme}
+          onResumeWorkspace={() => setShowStartHub(false)}
+          onSelectTemplate={handleLoadTemplate}
+          onUploadFiles={(list) => void handleUploadFiles(list)}
+          onPullFromGitHub={(repoUrl, branch) => handlePullFromGitHub(repoUrl, branch, '')}
+          githubBusy={githubBusyAction === 'pull'}
+          githubError={githubStatusError}
+          onOpenShortcuts={() => setShortcutsModalOpen(true)}
+        />
+      ) : (
+        <>
+          <TopToolbar
+            projectName={projectName}
+            editorMode={editorMode}
+            onChangeMode={handleChangeMode}
+            viewport={viewport}
+            onChangeViewport={handleChangeViewport}
+            studioTheme={studioTheme}
+            onChangeStudioTheme={setStudioTheme}
+            canUndo={history.past.length > 0}
+            canRedo={history.future.length > 0}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            onSaveProject={() => void handleManualSave()}
+            onResetProject={handleResetProject}
+            onExportZip={handleExportZip}
+            onUploadFiles={handleUploadFiles}
+            autoSaveStatus={autoSaveStatus}
+            onConnectDiskFolder={handleConnectDiskFolder}
+            onOpenStartHub={() => setShowStartHub(true)}
+            onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+            onOpenShortcuts={() => setShortcutsModalOpen(true)}
+            githubOpen={githubOpen}
+            onToggleGithubOpen={setGithubOpen}
+            commitModalOpen={githubCommitModalOpen}
+            onToggleCommitModal={setGithubCommitModalOpen}
+            githubConnection={githubConnection}
+            githubToken={githubToken}
+            onChangeGithubToken={setGithubToken}
+            githubBusyAction={githubBusyAction}
+            githubStatusError={githubStatusError}
+            githubStatusMessage={githubStatusMessage}
+            githubRequiresAuthPrompt={githubRequiresAuthPrompt}
+            onPullFromGitHub={async (repoUrl, branch, token) => {
+              await handlePullFromGitHub(repoUrl, branch, token);
+            }}
+            onPushToGitHub={async (repoUrl, branch, commitMessage, token) => {
+              await handlePushToGitHub(repoUrl, branch, commitMessage, token, false);
+            }}
+            onToggleGithubAutoSync={handleToggleGithubAutoSync}
+          />
+
+          <div className="flex-1 min-h-0 flex relative z-10">
         {/* Transparent drag shield over iframe while resizing split panes */}
         {splitDrag && <div className="fixed inset-0 z-40 cursor-col-resize select-none" />}
 
         {leftSidebarCollapsed ? (
-          <div className="w-9 shrink-0 border-r border-white/[0.08] bg-[#111114] flex flex-col items-center py-2.5">
+          <div className="w-10 shrink-0 border-r border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col items-start px-1.5 py-2 relative z-20">
             <button
               type="button"
               onClick={() => {
@@ -1718,9 +2604,10 @@ export default function App() {
               }}
               aria-label="Expand Project Files sidebar"
               title="Expand Project Files (Ctrl+B)"
-              className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] transition-colors cursor-pointer"
+              className="group inline-flex items-center h-7 px-1.5 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] text-[11.5px] font-medium text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] studio-card-highlight studio-pressable shadow-sm cursor-pointer"
             >
-              <PanelLeftOpen className="w-4 h-4" strokeWidth={1.5} />
+              <PanelLeftOpen className="w-3.5 h-3.5 shrink-0" strokeWidth={1.4} />
+              <span className="studio-reveal-label">Files</span>
             </button>
           </div>
         ) : (
@@ -1831,7 +2718,7 @@ export default function App() {
         />
 
         {rightSidebarCollapsed ? (
-          <div className="w-9 shrink-0 border-l border-white/[0.08] bg-[#111114] flex flex-col items-center py-2.5">
+          <div className="w-10 shrink-0 border-l border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col items-end px-1.5 py-2 relative z-20">
             <button
               type="button"
               onClick={() => {
@@ -1840,9 +2727,10 @@ export default function App() {
               }}
               aria-label="Expand Inspector sidebar"
               title="Expand Inspector (Ctrl+I)"
-              className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] transition-colors cursor-pointer"
+              className="group inline-flex flex-row-reverse items-center h-7 px-1.5 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] text-[11.5px] font-medium text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] studio-card-highlight studio-pressable shadow-sm cursor-pointer"
             >
-              <PanelRightOpen className="w-4 h-4" strokeWidth={1.5} />
+              <PanelRightOpen className="w-3.5 h-3.5 shrink-0" strokeWidth={1.4} />
+              <span className="studio-reveal-label">Inspector</span>
             </button>
           </div>
         ) : (
@@ -1873,6 +2761,8 @@ export default function App() {
               activeTab={rightPanelTab}
               onChangeTab={setRightPanelTab}
               selectedElement={selectedElement}
+              projectImageAssets={projectImageAssets}
+              onUploadImageAsset={handleUploadImageAsset}
               domTree={domTree}
               onSelectDomNode={(nodeId) => {
                 if (editorMode !== 'edit') {
@@ -1935,6 +2825,41 @@ export default function App() {
           </>
         )}
       </div>
+        </>
+      )}
+
+      <CommandPaletteModal
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        hasSelectedElement={Boolean(selectedElement)}
+        editorMode={editorMode}
+        onToggleMode={() => handleChangeMode(editorMode === 'edit' ? 'interact' : 'edit')}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        canUndo={history.past.length > 0}
+        canRedo={history.future.length > 0}
+        onToggleZen={handleToggleZenMode}
+        onToggleOutlines={handleToggleOutlines}
+        onZoom100={() => setCanvasZoom('100')}
+        onZoomFit={() => setCanvasZoom('fit')}
+        onOpenStartHub={() => setShowStartHub(true)}
+        onOpenShortcuts={() => setShortcutsModalOpen(true)}
+        onOpenGithub={() => setGithubCommitModalOpen(true)}
+        onExportZip={() => void handleExportZip()}
+        onApplyFont={(fontCssValue, label) => {
+          if (!selectedElement) {
+            showToast('Select an element on the canvas first');
+            return;
+          }
+          handleCommitFormattingStyle({ 'font-family': fontCssValue }, `Font: ${label}`);
+          showToast(`Applied ${label}`);
+        }}
+        onQuickInsertComponent={(componentId) => {
+          setShowStartHub(false);
+          handleQuickInsertById(componentId);
+        }}
+        onSelectTemplate={handleLoadTemplate}
+      />
 
       <ShortcutsModal open={shortcutsModalOpen} onClose={() => setShortcutsModalOpen(false)} />
 
@@ -1942,7 +2867,7 @@ export default function App() {
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3.5 py-2 rounded-xl bg-[#18181b] border border-white/[0.1] studio-card-highlight text-[12px] font-medium text-zinc-100 shadow-2xl shadow-black/70 pointer-events-none"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 rounded-full bg-[var(--studio-surface)] border border-[var(--studio-border-strong)] studio-card-highlight text-[11.5px] font-medium text-[var(--studio-text-strong)] shadow-2xl pointer-events-none whitespace-nowrap"
         >
           {toastMessage}
         </div>

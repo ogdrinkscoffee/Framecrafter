@@ -1,7 +1,21 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import esbuild from 'esbuild';
+import type * as esbuild from 'esbuild';
 import type { CompiledProjectBundle } from './src/utils/projectBundler.ts';
+
+let cachedEsbuild: typeof esbuild | null = null;
+async function getEsbuild(): Promise<typeof esbuild> {
+  if (cachedEsbuild) return cachedEsbuild;
+  try {
+    const mod = await import('esbuild');
+    cachedEsbuild = (mod.default ?? mod) as typeof esbuild;
+    return cachedEsbuild;
+  } catch {
+    const wasmMod = await import('esbuild-wasm');
+    cachedEsbuild = ((wasmMod as { default?: unknown }).default ?? wasmMod) as unknown as typeof esbuild;
+    return cachedEsbuild;
+  }
+}
 
 export interface BundleInputFile {
   path: string;
@@ -60,14 +74,27 @@ function stripJsonComments(raw: string): string {
     .replace(/,\s*([}\]])/g, '$1');
 }
 
-function parsePathAliases(fileMap: Map<string, string>): Array<{ prefix: string; targets: string[] }> {
+function parsePathAliases(fileMap: Map<string, string>): {
+  aliases: Array<{ prefix: string; targets: string[] }>;
+  baseUrls: string[];
+} {
   const aliases: Array<{ prefix: string; targets: string[] }> = [];
-  const cfgRaw = fileMap.get('tsconfig.json') ?? fileMap.get('jsconfig.json');
-  if (cfgRaw) {
+  const baseUrls: string[] = [];
+  for (const cfgName of ['tsconfig.app.json', 'tsconfig.json', 'tsconfig.base.json', 'jsconfig.json']) {
+    const cfgRaw = fileMap.get(cfgName);
+    if (!cfgRaw) continue;
     try {
       const parsed = JSON.parse(stripJsonComments(cfgRaw)) as {
-        compilerOptions?: { paths?: Record<string, string[]> };
+        compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> };
       };
+      const rawBaseUrl = parsed.compilerOptions?.baseUrl;
+      const base =
+        typeof rawBaseUrl === 'string'
+          ? normalizePosix(rawBaseUrl === '.' ? '' : rawBaseUrl)
+          : '';
+      if (typeof rawBaseUrl === 'string' && !baseUrls.includes(base)) {
+        baseUrls.push(base);
+      }
       const paths = parsed.compilerOptions?.paths;
       if (paths && typeof paths === 'object') {
         for (const [pattern, targets] of Object.entries(paths)) {
@@ -75,7 +102,10 @@ function parsePathAliases(fileMap: Map<string, string>): Array<{ prefix: string;
           const cleanPattern = pattern.replace(/\*$/, '');
           aliases.push({
             prefix: cleanPattern,
-            targets: targets.map((t) => normalizePosix(t.replace(/\*$/, ''))),
+            targets: targets.map((t) => {
+              const stripped = t.replace(/\*$/, '');
+              return normalizePosix(base ? `${base}/${stripped}` : stripped);
+            }),
           });
         }
       }
@@ -86,7 +116,7 @@ function parsePathAliases(fileMap: Map<string, string>): Array<{ prefix: string;
   if (!aliases.some((a) => a.prefix === '@/')) {
     aliases.push({ prefix: '@/', targets: ['src', ''] });
   }
-  return aliases;
+  return { aliases, baseUrls };
 }
 
 function parseReactVersionFromPkg(fileMap: Map<string, string>): string {
@@ -285,7 +315,7 @@ export async function bundleProjectFiles(
     };
   }
 
-  const aliases = parsePathAliases(fileMap);
+  const { aliases, baseUrls } = parsePathAliases(fileMap);
   const reactVersion = parseReactVersionFromPkg(fileMap);
   const rootEntryCode = entryModules
     .map((m) => `import ${JSON.stringify('./' + m)};`)
@@ -309,6 +339,9 @@ export async function bundleProjectFiles(
           }
         }
       }
+      for (const baseDir of baseUrls) {
+        candidateBases.push(normalizePosix(baseDir ? `${baseDir}/${cleanSpec}` : cleanSpec));
+      }
     }
 
     for (const base of candidateBases) {
@@ -326,6 +359,7 @@ export async function bundleProjectFiles(
     let tailwindDetected = initialTailwindFlag;
     const missingLocalPackages: string[] = [];
     const externalSpecs = new Set<string>();
+    const externalCssUrls = new Set<string>();
 
     const plugin: esbuild.Plugin = {
       name: 've-vfs',
@@ -342,6 +376,10 @@ export async function bundleProjectFiles(
 
           // Only run virtual resolution when importing from virtual project files
           if (args.importer && args.namespace === 've-vfs') {
+            if (spec === 'vite/client' || spec === '@vite/env' || spec.startsWith('virtual:')) {
+              return { path: spec, namespace: 've-noop-stub' };
+            }
+
             const importerPath = args.importer === '__ve_root_entry__.tsx' ? '' : args.importer;
             const resolvedVfs = resolveVirtualPath(spec, importerPath);
             if (resolvedVfs) {
@@ -353,6 +391,16 @@ export async function bundleProjectFiles(
                 return { path: spec, namespace: 've-missing-asset' };
               }
               return undefined;
+            }
+
+            const cleanBare = spec.split('?')[0].split('#')[0];
+            if (cleanBare === 'tailwindcss') {
+              tailwindDetected = true;
+              return { path: cleanBare, namespace: 've-noop-stub' };
+            }
+            if (/\.(css|scss|sass|less|styl)$/i.test(cleanBare) || cleanBare === 'swiper/css' || cleanBare.startsWith('swiper/css/')) {
+              externalCssUrls.add(`https://esm.sh/${cleanBare}`);
+              return { path: cleanBare, namespace: 've-noop-stub' };
             }
 
             // Bare npm package specifier (e.g. react, lucide-react, etc.)
@@ -372,6 +420,13 @@ export async function bundleProjectFiles(
           }
 
           return undefined;
+        });
+
+        build.onLoad({ filter: /.*/, namespace: 've-noop-stub' }, () => {
+          return {
+            contents: 'export default {};',
+            loader: 'js',
+          };
         });
 
         build.onLoad({ filter: /.*/, namespace: 've-missing-asset' }, () => {
@@ -425,7 +480,8 @@ export async function bundleProjectFiles(
       },
     };
 
-    const result = await esbuild.build({
+    const esbuildImpl = await getEsbuild();
+    const result = await esbuildImpl.build({
       entryPoints: ['__ve_root_entry__.tsx'],
       bundle: true,
       write: false,
@@ -445,7 +501,7 @@ export async function bundleProjectFiles(
       logLevel: 'silent',
     });
 
-    return { result, tailwindDetected, missingLocalPackages, externalSpecs };
+    return { result, tailwindDetected, missingLocalPackages, externalSpecs, externalCssUrls };
   };
 
   try {
@@ -474,6 +530,7 @@ export async function bundleProjectFiles(
     return {
       js: js.trim(),
       css: css.trim(),
+      ...(pass.externalCssUrls.size > 0 ? { externalCssUrls: Array.from(pass.externalCssUrls) } : {}),
       replacedScriptSrcs,
       hasInlineModuleReplacement,
       usesTailwind: pass.tailwindDetected,

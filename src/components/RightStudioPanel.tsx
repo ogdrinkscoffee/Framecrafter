@@ -1,8 +1,9 @@
 import React from 'react';
-import { Globe, Layers, Palette, PanelRightClose, SlidersHorizontal } from 'lucide-react';
+import { PanelRightClose } from 'lucide-react';
 import type {
   DomTreeNode,
   DraggableComponentDef,
+  ProjectFile,
   ResponsiveScope,
   RightPanelTab,
   SelectedElementInfo,
@@ -13,6 +14,13 @@ import { GlobalStylesPanel } from './GlobalStylesPanel';
 import { InspectorPanel } from './InspectorPanel';
 import { SeoMetaPanel } from './SeoMetaPanel';
 import type { SvgShapeHtmlPatch } from '../utils/htmlSync';
+import {
+  DuotoneElementsIcon,
+  DuotoneInspectorIcon,
+  DuotonePaletteIcon,
+  DuotoneSeoIcon,
+  HoverIconButton,
+} from './StudioPrimitives';
 
 interface RightStudioPanelProps {
   widthPx: number;
@@ -20,6 +28,8 @@ interface RightStudioPanelProps {
   activeTab: RightPanelTab;
   onChangeTab: (tab: RightPanelTab) => void;
   selectedElement: SelectedElementInfo | null;
+  projectImageAssets: ProjectFile[];
+  onUploadImageAsset: (file: File) => Promise<string | null>;
   domTree: DomTreeNode[];
   onSelectDomNode: (nodeId: string) => void;
   onHoverDomNode: (nodeId: string | null) => void;
@@ -66,12 +76,49 @@ interface RightStudioPanelProps {
   onDeleteRootVar: (name: string) => void;
 }
 
+const STUDIO_PANEL_TABS: Array<{
+  id: RightPanelTab;
+  label: string;
+  renderIcon: (active: boolean) => React.ReactNode;
+}> = [
+  {
+    id: 'inspector',
+    label: 'Inspector',
+    renderIcon: (active) => (
+      <DuotoneInspectorIcon className={`w-3.5 h-3.5 ${active ? 'text-indigo-500 dark:text-indigo-400' : ''}`} />
+    ),
+  },
+  {
+    id: 'elements',
+    label: 'Elements',
+    renderIcon: (active) => (
+      <DuotoneElementsIcon className={`w-3.5 h-3.5 ${active ? 'text-indigo-500 dark:text-indigo-400' : ''}`} />
+    ),
+  },
+  {
+    id: 'seo',
+    label: 'SEO & Meta',
+    renderIcon: (active) => (
+      <DuotoneSeoIcon className={`w-3.5 h-3.5 ${active ? 'text-indigo-500 dark:text-indigo-400' : ''}`} />
+    ),
+  },
+  {
+    id: 'global-styles',
+    label: 'Global Styles',
+    renderIcon: (active) => (
+      <DuotonePaletteIcon className={`w-3.5 h-3.5 ${active ? 'text-indigo-500 dark:text-indigo-400' : ''}`} />
+    ),
+  },
+];
+
 export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
   widthPx,
   onCollapse,
   activeTab,
   onChangeTab,
   selectedElement,
+  projectImageAssets,
+  onUploadImageAsset,
   domTree,
   onSelectDomNode,
   onHoverDomNode,
@@ -117,86 +164,54 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
     <aside
       data-testid="right-sidebar"
       style={{ width: `${widthPx}px` }}
-      className="shrink-0 border-l border-white/[0.08] bg-[#111114] flex flex-col min-h-0"
+      className="shrink-0 border-l border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col min-h-0"
     >
-      {/* Pill Segmented Right Panel Tabs + Collapse Button */}
-      <div className="h-10 px-2 border-b border-white/[0.08] flex items-center gap-1.5 shrink-0">
+      {/* Active tab keeps visible label; non-active tabs are icon-only revealing label on hover */}
+      <div className="h-9 px-2.5 border-b border-[var(--studio-border)] flex items-center justify-between gap-1.5 shrink-0">
         <div
-          className="flex items-center justify-between gap-0.5 flex-1 min-w-0 p-0.5 rounded-full bg-[#09090b] border border-white/[0.08] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] overflow-hidden"
+          className="inline-flex items-center gap-0.5 flex-1 min-w-0 h-7 p-0.5 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] overflow-hidden"
           role="tablist"
           aria-label="Right Studio Panel"
         >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'inspector'}
-            onClick={() => onChangeTab('inspector')}
-            className={`inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded-full text-[10.5px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === 'inspector'
-                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-                : 'text-zinc-400 hover:text-zinc-100'
-            }`}
-          >
-            <SlidersHorizontal className="w-3 h-3 shrink-0" strokeWidth={1.5} />
-            Inspector
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'elements'}
-            onClick={() => onChangeTab('elements')}
-            className={`inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded-full text-[10.5px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === 'elements'
-                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-                : 'text-zinc-400 hover:text-zinc-100'
-            }`}
-          >
-            <Layers className="w-3 h-3 shrink-0" strokeWidth={1.5} />
-            Elements
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'seo'}
-            onClick={() => onChangeTab('seo')}
-            className={`inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded-full text-[10.5px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === 'seo'
-                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-                : 'text-zinc-400 hover:text-zinc-100'
-            }`}
-          >
-            <Globe className="w-3 h-3 shrink-0" strokeWidth={1.5} />
-            SEO &amp; Meta
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'global-styles'}
-            onClick={() => onChangeTab('global-styles')}
-            className={`inline-flex items-center justify-center gap-1 py-1 px-1.5 rounded-full text-[10.5px] font-medium transition-all whitespace-nowrap shrink-0 cursor-pointer ${
-              activeTab === 'global-styles'
-                ? 'bg-[#27272a] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]'
-                : 'text-zinc-400 hover:text-zinc-100'
-            }`}
-          >
-            <Palette className="w-3 h-3 shrink-0" strokeWidth={1.5} />
-            Global Styles
-          </button>
+          {STUDIO_PANEL_TABS.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                aria-label={tab.label}
+                title={tab.label}
+                onClick={() => onChangeTab(tab.id)}
+                className={`group inline-flex items-center justify-center h-full px-2 rounded-md text-[11px] font-semibold studio-pressable whitespace-nowrap shrink-0 cursor-pointer ${
+                  isActive
+                    ? 'studio-reveal-open bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs border border-[var(--studio-border)]'
+                    : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-elevated)] border border-transparent'
+                }`}
+              >
+                <span className="shrink-0 flex items-center">{tab.renderIcon(isActive)}</span>
+                <span className="studio-reveal-label">{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
-        <button
-          type="button"
+
+        <HoverIconButton
+          size="xs"
           onClick={onCollapse}
-          aria-label="Collapse Inspector sidebar"
+          label="Hide"
+          ariaLabel="Collapse Inspector sidebar"
           title="Collapse Inspector (Ctrl+I)"
-          className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-[#27272a] transition-colors shrink-0 cursor-pointer"
-        >
-          <PanelRightClose className="w-3.5 h-3.5" strokeWidth={1.5} />
-        </button>
+          icon={<PanelRightClose className="w-3.5 h-3.5" strokeWidth={1.4} />}
+        />
       </div>
 
       {activeTab === 'inspector' && (
         <InspectorPanel
           selectedElement={selectedElement}
+          projectImageAssets={projectImageAssets}
+          onUploadImageAsset={onUploadImageAsset}
           aspectRatioLocked={aspectRatioLocked}
           onToggleAspectRatioLock={onToggleAspectRatioLock}
           responsiveScope={responsiveScope}

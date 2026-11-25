@@ -62,11 +62,33 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.35);
     display: none;
   }
+  #__ve_snap_x {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    z-index: 2147483646;
+    pointer-events: none;
+    background: rgba(236, 72, 153, 0.9);
+    display: none;
+  }
+  #__ve_snap_y {
+    position: fixed;
+    left: 0;
+    right: 0;
+    height: 1px;
+    z-index: 2147483646;
+    pointer-events: none;
+    background: rgba(236, 72, 153, 0.9);
+    display: none;
+  }
 </style>
 <style data-ve-internal="live-responsive-css"></style>
 <style data-ve-internal="layout-outlines"></style>
 <div id="__ve_hover_badge" data-ve-internal="badge"></div>
 <div id="__ve_action_toast" data-ve-internal="action-toast" role="status"></div>
+<div id="__ve_snap_x" data-ve-internal="snap-x"></div>
+<div id="__ve_snap_y" data-ve-internal="snap-y"></div>
 <script data-ve-internal="bridge-script">
 (function() {
   var mode = ${serializedMode};
@@ -79,6 +101,8 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   var runtimeMap = new WeakMap();
   var badge = document.getElementById('__ve_hover_badge');
   var actionToast = document.getElementById('__ve_action_toast');
+  var snapXLine = document.getElementById('__ve_snap_x');
+  var snapYLine = document.getElementById('__ve_snap_y');
   var actionToastTimer = null;
   var domTreeTimer = null;
   var outlinesEnabled = false;
@@ -143,10 +167,69 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
   function isInternalEl(el) {
     if (!el || el.nodeType !== 1) return true;
-    if (el.id === '__ve_hover_badge' || el.id === '__ve_action_toast' || el.getAttribute('data-ve-internal')) return true;
+    if (
+      el.id === '__ve_hover_badge' ||
+      el.id === '__ve_action_toast' ||
+      el.id === '__ve_snap_x' ||
+      el.id === '__ve_snap_y' ||
+      el.getAttribute('data-ve-internal')
+    ) return true;
     if (el.closest && el.closest('[data-ve-internal]')) return true;
     var tag = el.tagName.toLowerCase();
     return tag === 'html' || tag === 'head' || tag === 'script' || tag === 'style' || tag === 'meta' || tag === 'link';
+  }
+
+  function clearSnapGuides() {
+    if (snapXLine) snapXLine.style.display = 'none';
+    if (snapYLine) snapYLine.style.display = 'none';
+  }
+
+  function updateSnapGuides(el) {
+    if (!el || !el.parentElement) {
+      clearSnapGuides();
+      return;
+    }
+    var r = el.getBoundingClientRect();
+    var rMidX = r.left + r.width / 2;
+    var rMidY = r.top + r.height / 2;
+    var snapXPos = null;
+    var snapYPos = null;
+    var siblings = el.parentElement.children;
+    for (var i = 0; i < siblings.length; i++) {
+      var sib = siblings[i];
+      if (!sib || sib === el || isInternalEl(sib)) continue;
+      var sr = sib.getBoundingClientRect();
+      if (sr.width === 0 && sr.height === 0) continue;
+      var sMidX = sr.left + sr.width / 2;
+      var sMidY = sr.top + sr.height / 2;
+      if (snapXPos === null) {
+        if (Math.abs(r.left - sr.left) <= 4) snapXPos = sr.left;
+        else if (Math.abs(r.right - sr.right) <= 4) snapXPos = sr.right;
+        else if (Math.abs(rMidX - sMidX) <= 4) snapXPos = sMidX;
+      }
+      if (snapYPos === null) {
+        if (Math.abs(r.top - sr.top) <= 4) snapYPos = sr.top;
+        else if (Math.abs(r.bottom - sr.bottom) <= 4) snapYPos = sr.bottom;
+        else if (Math.abs(rMidY - sMidY) <= 4) snapYPos = sMidY;
+      }
+      if (snapXPos !== null && snapYPos !== null) break;
+    }
+    if (snapXLine) {
+      if (snapXPos !== null) {
+        snapXLine.style.left = Math.round(snapXPos) + 'px';
+        snapXLine.style.display = 'block';
+      } else {
+        snapXLine.style.display = 'none';
+      }
+    }
+    if (snapYLine) {
+      if (snapYPos !== null) {
+        snapYLine.style.top = Math.round(snapYPos) + 'px';
+        snapYLine.style.display = 'block';
+      } else {
+        snapYLine.style.display = 'none';
+      }
+    }
   }
 
   function tagMountedElements(rootNode) {
@@ -347,6 +430,8 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       className: typeof el.className === 'string' ? el.className : '',
       href: el.getAttribute('href') || '',
       target: el.getAttribute('target') || '',
+      imgSrc: el.getAttribute('data-ve-raw-src') || el.getAttribute('src') || '',
+      imgAlt: el.getAttribute('alt') || '',
       onclickAttr: el.getAttribute('onclick') || '',
       actionType: el.getAttribute('data-ve-action') || '',
       actionValue: el.getAttribute('data-ve-value') || '',
@@ -405,7 +490,8 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
         zIndex: el.style.zIndex || (computed.zIndex === 'auto' ? '0' : computed.zIndex),
         display: computed.display,
         flexDirection: computed.flexDirection,
-        gap: computed.gap
+        gap: computed.gap,
+        objectFit: el.style.objectFit || computed.objectFit || 'fill'
       },
       inlineStyles: parseInlineStyle(el)
     };
@@ -558,6 +644,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     var nextTop = Math.round(moveDrag.startTop + dy);
     moveDrag.el.style.left = nextLeft + 'px';
     moveDrag.el.style.top = nextTop + 'px';
+    updateSnapGuides(moveDrag.el);
     positionBadge(moveDrag.el, 'Move · x: ' + nextLeft + 'px, y: ' + nextTop + 'px', '#3b82f6');
     notifyRectChange();
   }, true);
@@ -566,6 +653,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     if (!moveDrag) return;
     var drag = moveDrag;
     moveDrag = null;
+    clearSnapGuides();
     if (drag.dragging) {
       drag.el.removeAttribute('data-ve-dragging');
       if (badge) badge.style.display = 'none';
@@ -723,19 +811,37 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
     var hasMod = e.ctrlKey || e.metaKey;
     var lower = e.key.toLowerCase();
+    var hasTextSel = Boolean(window.getSelection && window.getSelection().toString().length > 0);
+    var isArrow = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight';
+    var isZoomKey = hasMod && (lower === '=' || lower === '+' || lower === '-' || lower === '0' || e.code === 'Equal' || e.code === 'Minus' || e.code === 'Digit0');
+    var isModEditKey = hasMod && (
+      ['z', 'y', 's', 'e', 'b', 'i', 'd', 'k', 'x', 'v', 'u', 'l', 'r', 'h', '\\\\', ']', '['].indexOf(lower) !== -1 ||
+      (lower === 'c' && (!hasTextSel || e.shiftKey || e.altKey)) ||
+      e.code === 'Backslash' ||
+      e.code === 'BracketLeft' ||
+      e.code === 'BracketRight'
+    );
     var isShortcut =
       e.key === 'Escape' ||
       e.key === '?' ||
-      (e.key === 'Delete' && mode === 'edit') ||
-      (e.key === 'Backspace' && mode === 'edit') ||
+      (e.shiftKey && (e.code === 'Digit1' || e.key === '!')) ||
+      (mode === 'edit' && (
+        e.key === 'Delete' ||
+        e.key === 'Backspace' ||
+        e.key === 'Enter' ||
+        e.key === '\\\\' ||
+        isArrow
+      )) ||
       (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) ||
-      (!hasMod && !e.altKey && (e.key === '1' || e.key === '2' || e.key === '3')) ||
-      (hasMod && ['z', 'y', 's', 'e', 'b', 'i', 'd'].indexOf(lower) !== -1);
+      (!hasMod && !e.altKey && !e.shiftKey && ['1', '2', '3', 'v', 'g'].indexOf(lower) !== -1) ||
+      isZoomKey ||
+      isModEditKey;
 
     if (isShortcut) {
       e.preventDefault();
       postToParent('IFRAME_KEYDOWN', {
         key: e.key,
+        code: e.code || '',
         ctrlKey: e.ctrlKey,
         metaKey: e.metaKey,
         shiftKey: e.shiftKey,
@@ -878,12 +984,35 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       return;
     }
 
+    if (msg.type === 'REGISTER_PROJECT_ASSET' && Array.isArray(msg.keys) && msg.url) {
+      if (!window.__PROJECT_ASSETS__) window.__PROJECT_ASSETS__ = {};
+      msg.keys.forEach(function(k) {
+        if (k) {
+          window.__PROJECT_ASSETS__[k] = msg.url;
+          window.__PROJECT_ASSETS__[String(k).toLowerCase()] = msg.url;
+        }
+      });
+      return;
+    }
+
     if (msg.type === 'UPDATE_ATTRS' && selectedEl && msg.attributes) {
       Object.keys(msg.attributes).forEach(function(attr) {
         var val = msg.attributes[attr];
         if (val === null || val === '') {
           selectedEl.removeAttribute(attr);
+          if (attr === 'src') {
+            selectedEl.removeAttribute('data-ve-raw-src');
+          }
         } else {
+          if (attr === 'src' && typeof window.__resolveProjectAsset__ === 'function') {
+            var resolvedAsset = window.__resolveProjectAsset__(val);
+            if (resolvedAsset) {
+              selectedEl.setAttribute('data-ve-raw-src', val);
+              selectedEl.setAttribute('src', resolvedAsset);
+              return;
+            }
+            selectedEl.removeAttribute('data-ve-raw-src');
+          }
           selectedEl.setAttribute(attr, val);
         }
       });
@@ -1014,6 +1143,154 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
     if (msg.type === 'CLEAR_DROP_TARGET') {
       clearDropTarget();
+      return;
+    }
+
+    if (msg.type === 'START_INLINE_EDIT' && mode === 'edit' && selectedEl) {
+      if (isTextEditableElement(selectedEl)) {
+        clearHover();
+        editingEl = selectedEl;
+        originalEditText = selectedEl.textContent || '';
+        selectedEl.setAttribute('data-ve-editing', 'true');
+        selectedEl.setAttribute('contenteditable', 'true');
+        selectedEl.focus();
+      }
+      return;
+    }
+
+    if (msg.type === 'HOT_PATCH_CSS' || msg.type === 'HOT_PATCH_HTML') {
+      if (msg.googleFontHref) {
+        var fontLink = document.querySelector('link[data-ve-font="auto-fonts"]');
+        if (fontLink) {
+          if (fontLink.getAttribute('href') !== msg.googleFontHref) {
+            fontLink.setAttribute('href', msg.googleFontHref);
+          }
+        } else if (document.head) {
+          var newFontLink = document.createElement('link');
+          newFontLink.setAttribute('rel', 'stylesheet');
+          newFontLink.setAttribute('href', msg.googleFontHref);
+          newFontLink.setAttribute('data-ve-font', 'auto-fonts');
+          document.head.appendChild(newFontLink);
+        }
+      }
+
+      if (msg.cssSources && typeof msg.cssSources === 'object') {
+        var sourceStyles = document.querySelectorAll('style[data-ve-source]');
+        for (var si = 0; si < sourceStyles.length; si++) {
+          var srcKey = sourceStyles[si].getAttribute('data-ve-source');
+          if (srcKey && typeof msg.cssSources[srcKey] === 'string') {
+            sourceStyles[si].textContent = msg.cssSources[srcKey];
+          }
+        }
+      }
+
+      if (typeof msg.overrideCss === 'string') {
+        var overrideEl = document.querySelector('style[data-ve-source="src/framecraft-edits.css"], style[data-ve-source="framecraft-edits.css"]');
+        if (!overrideEl && document.head && msg.overrideCss) {
+          overrideEl = document.createElement('style');
+          overrideEl.setAttribute('data-ve-source', 'src/framecraft-edits.css');
+          document.head.appendChild(overrideEl);
+        }
+        if (overrideEl) {
+          overrideEl.textContent = msg.overrideCss;
+        }
+      }
+
+      if (msg.type === 'HOT_PATCH_HTML' && typeof msg.bodyHtml === 'string' && document.body) {
+        var savedX = window.scrollX;
+        var savedY = window.scrollY;
+        var prevSelectedVeId = msg.selectVeId !== undefined
+          ? msg.selectVeId
+          : (selectedEl ? selectedEl.getAttribute('data-ve-id') : null);
+
+        if (editingEl) {
+          editingEl.removeAttribute('contenteditable');
+          editingEl.removeAttribute('data-ve-editing');
+          editingEl = null;
+        }
+        clearHover();
+        clearDropTarget();
+
+        // Preserve JS-rendered runtime children (e.g. #task-list) inside empty template containers
+        var preservedById = {};
+        var runtimeEls = document.querySelectorAll('[data-ve-rt]');
+        for (var ri = 0; ri < runtimeEls.length; ri++) {
+          var rtParent = runtimeEls[ri].parentElement;
+          if (rtParent && rtParent.id && !rtParent.hasAttribute('data-ve-rt')) {
+            if (!preservedById[rtParent.id]) preservedById[rtParent.id] = [];
+            preservedById[rtParent.id].push(runtimeEls[ri]);
+          }
+        }
+
+        // Detach internal bridge nodes cleanly before replacing body markup
+        var internalNodes = [];
+        var bodyChildren = Array.prototype.slice.call(document.body.children);
+        for (var bi = 0; bi < bodyChildren.length; bi++) {
+          if (isInternalEl(bodyChildren[bi])) {
+            internalNodes.push(bodyChildren[bi]);
+          }
+        }
+
+        var tmp = document.createElement('div');
+        tmp.innerHTML = msg.bodyHtml;
+        var incomingNodes = Array.prototype.slice.call(tmp.childNodes);
+
+        // Remove all non-internal nodes in body
+        var curChild = document.body.firstChild;
+        while (curChild) {
+          var nextSibling = curChild.nextSibling;
+          if (curChild.nodeType !== 1 || !isInternalEl(curChild)) {
+            document.body.removeChild(curChild);
+          }
+          curChild = nextSibling;
+        }
+
+        var firstInternal = internalNodes[0] || null;
+        for (var ii = 0; ii < incomingNodes.length; ii++) {
+          var node = incomingNodes[ii];
+          if (node.nodeType === 1 && node.tagName && node.tagName.toLowerCase() === 'script') {
+            continue;
+          }
+          if (firstInternal && firstInternal.parentNode === document.body) {
+            document.body.insertBefore(node, firstInternal);
+          } else {
+            document.body.appendChild(node);
+          }
+        }
+
+        // Re-insert captured runtime nodes if the matching container is empty in the HTML source
+        var preservedIds = Object.keys(preservedById);
+        for (var pi = 0; pi < preservedIds.length; pi++) {
+          var pid = preservedIds[pi];
+          var host = document.getElementById(pid);
+          if (host && host.children.length === 0) {
+            var list = preservedById[pid];
+            for (var li = 0; li < list.length; li++) {
+              host.appendChild(list[li]);
+            }
+          }
+        }
+
+        tagMountedElements(document.body);
+        applyOutlinesCss();
+
+        selectedEl = null;
+        if (mode === 'edit' && prevSelectedVeId) {
+          var restored = findNodeById(prevSelectedVeId);
+          if (restored) {
+            selectElement(restored, true);
+          } else {
+            postToParent('ELEMENT_CLEARED', {});
+          }
+        } else if (prevSelectedVeId === null) {
+          postToParent('ELEMENT_CLEARED', {});
+        }
+
+        window.scrollTo(savedX, savedY);
+        emitDomTree();
+      }
+
+      window.requestAnimationFrame(notifyRectChange);
       return;
     }
 

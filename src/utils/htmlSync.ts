@@ -804,6 +804,22 @@ export function buildTableHtml(rows: number, cols: number): string {
   return `<table style="width: 100%; border-collapse: collapse; margin: 14px 0; background-color: #ffffff; font-size: 13px;"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table>`;
 }
 
+export function extractElementHtmlByVeId(html: string, veId: string): string | null {
+  const elements = scanHtmlElements(html);
+  const target = elements.find((el) => el.veId === veId);
+  if (!target) return null;
+
+  let snippet = html.slice(target.openStart, target.closeEnd);
+  snippet = snippet
+    .replace(/\sdata-ve-node\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
+    .replace(/\sdata-ve-id\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
+    .replace(/\sid\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (_m, d, s) => {
+      const orig = d ?? s ?? '';
+      return orig ? ` id="${orig}-copy"` : '';
+    });
+  return snippet;
+}
+
 export function duplicateElementInHtml(
   html: string,
   veId: string
@@ -812,14 +828,8 @@ export function duplicateElementInHtml(
   const target = elements.find((el) => el.veId === veId);
   if (!target) return { html, duplicatedVeId: null };
 
-  let snippet = html.slice(target.openStart, target.closeEnd);
-  // Remove data-ve-node / id collisions cleanly on the duplicate
-  snippet = snippet
-    .replace(/\sdata-ve-node\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
-    .replace(/\sid\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (_m, d, s) => {
-      const orig = d ?? s ?? '';
-      return orig ? ` id="${orig}-copy"` : '';
-    });
+  const snippet = extractElementHtmlByVeId(html, veId);
+  if (!snippet) return { html, duplicatedVeId: null };
 
   const insertPos = target.closeEnd;
   const nextHtml = html.slice(0, insertPos) + '\n' + snippet + html.slice(insertPos);

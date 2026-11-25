@@ -29,7 +29,7 @@ const CODE_EXTENSIONS = [
 ];
 
 const STATIC_ASSET_RE =
-  /\.(png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|eot|otf|apk|mp4|webm|mp3|wav|pdf)$/i;
+  /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico|woff2?|ttf|eot|otf|apk|mp4|webm|mp3|wav|pdf)$/i;
 
 let esbuildInitPromise: Promise<void> | null = null;
 
@@ -70,14 +70,57 @@ function stripJsonComments(raw: string): string {
     .replace(/,\s*([}\]])/g, '$1');
 }
 
-function parsePathAliases(fileMap: Map<string, string>): Array<{ prefix: string; targets: string[] }> {
-  const aliases: Array<{ prefix: string; targets: string[] }> = [];
-  const cfgRaw = fileMap.get('tsconfig.json') ?? fileMap.get('jsconfig.json');
-  if (cfgRaw) {
+interface PathAliasEntry {
+  prefix: string;
+  targets: string[];
+}
+
+function parsePathAliases(
+  fileMap: Map<string, string>,
+  entryDir = ''
+): { aliases: PathAliasEntry[]; baseUrls: string[] } {
+  const aliases: PathAliasEntry[] = [];
+  const baseUrls: string[] = [];
+
+  const configNames = [
+    'tsconfig.app.json',
+    'tsconfig.json',
+    'tsconfig.base.json',
+    'jsconfig.json',
+  ];
+  const candidateConfigs = [...configNames];
+  if (entryDir) {
+    for (const name of configNames) {
+      candidateConfigs.push(`${entryDir}/${name}`);
+    }
+  }
+
+  for (const cfgPath of candidateConfigs) {
+    const cfgRaw = fileMap.get(cfgPath);
+    if (!cfgRaw) continue;
+    const cfgDir = getDirname(cfgPath);
     try {
       const parsed = JSON.parse(stripJsonComments(cfgRaw)) as {
-        compilerOptions?: { paths?: Record<string, string[]> };
+        compilerOptions?: {
+          baseUrl?: string;
+          paths?: Record<string, string[]>;
+        };
       };
+      const rawBaseUrl = parsed.compilerOptions?.baseUrl;
+      const resolvedBaseUrl =
+        typeof rawBaseUrl === 'string'
+          ? normalizeRelativePath(
+              cfgDir
+                ? `${cfgDir}/${rawBaseUrl === '.' ? '' : rawBaseUrl}`
+                : rawBaseUrl === '.'
+                  ? ''
+                  : rawBaseUrl
+            )
+          : cfgDir;
+      if (typeof rawBaseUrl === 'string' && !baseUrls.includes(resolvedBaseUrl)) {
+        baseUrls.push(resolvedBaseUrl);
+      }
+
       const paths = parsed.compilerOptions?.paths;
       if (paths && typeof paths === 'object') {
         for (const [pattern, targets] of Object.entries(paths)) {
@@ -85,7 +128,11 @@ function parsePathAliases(fileMap: Map<string, string>): Array<{ prefix: string;
           const cleanPattern = pattern.replace(/\*$/, '');
           aliases.push({
             prefix: cleanPattern,
-            targets: targets.map((t) => normalizeRelativePath(t.replace(/\*$/, ''))),
+            targets: targets.map((t) => {
+              const stripped = t.replace(/\*$/, '');
+              const joined = resolvedBaseUrl ? `${resolvedBaseUrl}/${stripped}` : stripped;
+              return normalizeRelativePath(joined);
+            }),
           });
         }
       }
@@ -93,33 +140,95 @@ function parsePathAliases(fileMap: Map<string, string>): Array<{ prefix: string;
       // Ignore malformed tsconfig/jsconfig
     }
   }
+
   if (!aliases.some((a) => a.prefix === '@/')) {
-    aliases.push({ prefix: '@/', targets: ['src', ''] });
+    const fallbackTargets = entryDir ? [`${entryDir}/src`, 'src', entryDir, ''] : ['src', ''];
+    aliases.push({ prefix: '@/', targets: fallbackTargets.map((t) => normalizeRelativePath(t)) });
   }
-  return aliases;
+  return { aliases, baseUrls };
 }
 
-function parsePkgDependencies(fileMap: Map<string, string>): Record<string, string> {
-  const pkgRaw = fileMap.get('package.json');
-  if (!pkgRaw) return {};
-  try {
-    const parsed = JSON.parse(pkgRaw) as {
-      dependencies?: Record<string, string>;
-      devDependencies?: Record<string, string>;
-    };
-    return {
-      ...(parsed.devDependencies ?? {}),
-      ...(parsed.dependencies ?? {}),
-    };
-  } catch {
-    return {};
+function parseWorkspaceEntries(
+  rawFileMap: Map<string, string>,
+  runtimeFileMap: Map<string, string>
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const [filePath, rawContent] of rawFileMap.entries()) {
+    if (!filePath.endsWith('/package.json')) continue;
+    if (filePath.split('/').length > 4) continue;
+    try {
+      const pkg = JSON.parse(rawContent) as {
+        name?: string;
+        main?: string;
+        module?: string;
+        exports?: Record<string, unknown> | string;
+      };
+      if (!pkg.name || typeof pkg.name !== 'string') continue;
+      const pkgDir = getDirname(filePath);
+      const candidates: string[] = [];
+      if (typeof pkg.exports === 'string') candidates.push(pkg.exports);
+      else if (pkg.exports && typeof pkg.exports === 'object') {
+        const dot = pkg.exports['.'];
+        if (typeof dot === 'string') candidates.push(dot);
+        else if (dot && typeof dot === 'object') {
+          const dotObj = dot as Record<string, unknown>;
+          for (const key of ['import', 'browser', 'default', 'require']) {
+            if (typeof dotObj[key] === 'string') candidates.push(dotObj[key] as string);
+          }
+        }
+      }
+      if (typeof pkg.module === 'string') candidates.push(pkg.module);
+      if (typeof pkg.main === 'string') candidates.push(pkg.main);
+      candidates.push('src/index.tsx', 'src/index.ts', 'src/index.jsx', 'src/index.js', 'index.ts', 'index.tsx', 'index.js');
+
+      for (const rel of candidates) {
+        for (const ext of ['', '.tsx', '.ts', '.jsx', '.js']) {
+          const joined = joinPosix(pkgDir, rel + ext);
+          if (runtimeFileMap.has(joined)) {
+            map.set(pkg.name, joined);
+            break;
+          }
+        }
+        if (map.has(pkg.name)) break;
+      }
+    } catch {
+      // Ignore invalid workspace package.json
+    }
   }
+  return map;
+}
+
+function parsePkgDependencies(fileMap: Map<string, string>, entryDir = ''): Record<string, string> {
+  const pkgPaths = entryDir ? [`${entryDir}/package.json`, 'package.json'] : ['package.json'];
+  const merged: Record<string, string> = {};
+  for (let i = pkgPaths.length - 1; i >= 0; i--) {
+    const pkgRaw = fileMap.get(pkgPaths[i]);
+    if (!pkgRaw) continue;
+    try {
+      const parsed = JSON.parse(pkgRaw) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+      };
+      Object.assign(
+        merged,
+        parsed.peerDependencies ?? {},
+        parsed.devDependencies ?? {},
+        parsed.dependencies ?? {}
+      );
+    } catch {
+      // Ignore malformed package.json
+    }
+  }
+  return merged;
 }
 
 function parseExactSemver(rawVer: string | undefined): string | null {
   if (!rawVer || typeof rawVer !== 'string') return null;
   const cleaned = rawVer.trim().replace(/^[~^>=<\s]+/, '').split(/\s+/)[0];
-  return /^\d+\.\d+\.\d+(-[\w.]+)?$/.test(cleaned) ? cleaned : null;
+  if (/^\d+\.\d+\.\d+(-[\w.]+)?$/.test(cleaned)) return cleaned;
+  if (/^\d+\.\d+$/.test(cleaned) || /^\d+$/.test(cleaned)) return cleaned;
+  return null;
 }
 
 function splitPackageSpecifier(spec: string): { pkgName: string; subpath: string } {
@@ -140,6 +249,33 @@ function splitPackageSpecifier(spec: string): { pkgName: string; subpath: string
     pkgName: spec.slice(0, slashIdx),
     subpath: spec.slice(slashIdx),
   };
+}
+
+const EXTERNAL_CSS_PACKAGES = new Set([
+  'normalize.css',
+  'animate.css',
+  'modern-normalize',
+  'sanitize.css',
+  'reset-css',
+  'ress',
+  'water.css',
+  'mvp.css',
+  'pico.css',
+  '@picocss/pico',
+]);
+
+function isExternalCssSpecifier(cleanSpec: string): boolean {
+  if (/\.(css|scss|sass|less|styl)$/i.test(cleanSpec)) return true;
+  if (EXTERNAL_CSS_PACKAGES.has(cleanSpec)) return true;
+  if (cleanSpec === 'swiper/css' || cleanSpec.startsWith('swiper/css/')) return true;
+  return false;
+}
+
+function buildEsmShCssUrl(spec: string, pkgDeps: Record<string, string>): string {
+  const { pkgName, subpath } = splitPackageSpecifier(spec);
+  const ver = parseExactSemver(pkgDeps[pkgName]);
+  const pkgPinned = ver ? `${pkgName}@${ver}` : pkgName;
+  return `https://esm.sh/${pkgPinned}${subpath}`;
 }
 
 export function buildEsmShImportMap(
@@ -374,18 +510,191 @@ export const Buffer = {
 export default Buffer;
 `;
 
+const NODE_URL_SHIM = `
+export const URL = globalThis.URL;
+export const URLSearchParams = globalThis.URLSearchParams;
+export function fileURLToPath(u) { return String(u || '').replace(/^file:\\/\\//i, ''); }
+export function pathToFileURL(p) { return new URL('file://' + (String(p || '').startsWith('/') ? '' : '/') + String(p || '')); }
+export function parse(u) { try { const p = new globalThis.URL(u, 'http://localhost'); return { href: p.href, protocol: p.protocol, host: p.host, hostname: p.hostname, port: p.port, pathname: p.pathname, search: p.search, query: p.search.slice(1), hash: p.hash }; } catch { return { href: String(u || '') }; } }
+export function format(obj) { return typeof obj === 'string' ? obj : (obj && obj.href) || ''; }
+export function resolve(from, to) { try { return new globalThis.URL(to, from).href; } catch { return String(to || ''); } }
+export default { URL, URLSearchParams, fileURLToPath, pathToFileURL, parse, format, resolve };
+`;
+
+const NODE_UTIL_SHIM = `
+export const TextEncoder = globalThis.TextEncoder;
+export const TextDecoder = globalThis.TextDecoder;
+export function promisify(fn) { return (...args) => new Promise((resolve, reject) => fn(...args, (err, res) => err ? reject(err) : resolve(res))); }
+export function inherits(ctor, superCtor) { if (ctor && superCtor) { ctor.super_ = superCtor; Object.setPrototypeOf(ctor.prototype, superCtor.prototype); } }
+export function inspect(v) { try { return typeof v === 'string' ? v : JSON.stringify(v); } catch { return String(v); } }
+export function format(f, ...args) { return [f, ...args].map(v => typeof v === 'string' ? v : inspect(v)).join(' '); }
+export function deprecate(fn) { return fn; }
+export const types = { isUint8Array: (v) => v instanceof Uint8Array, isDate: (v) => v instanceof Date, isRegExp: (v) => v instanceof RegExp };
+export default { TextEncoder, TextDecoder, promisify, inherits, inspect, format, deprecate, types };
+`;
+
+const NODE_ASSERT_SHIM = `
+export function ok(val, msg) { if (!val) throw new Error(msg || 'Assertion failed'); }
+export function strictEqual(a, b, msg) { if (!Object.is(a, b)) throw new Error(msg || 'Expected ' + a + ' === ' + b); }
+export function equal(a, b, msg) { if (a != b) throw new Error(msg || 'Expected ' + a + ' == ' + b); }
+export const strict = ok;
+export default Object.assign(ok, { ok, strictEqual, equal, strict });
+`;
+
+const NODE_QUERYSTRING_SHIM = `
+export function parse(str) {
+  const out = {};
+  const params = new URLSearchParams(String(str || '').replace(/^\\?/, ''));
+  params.forEach((v, k) => { out[k] = k in out ? (Array.isArray(out[k]) ? [...out[k], v] : [out[k], v]) : v; });
+  return out;
+}
+export function stringify(obj) {
+  const params = new URLSearchParams();
+  if (obj && typeof obj === 'object') {
+    for (const [k, v] of Object.entries(obj)) {
+      if (Array.isArray(v)) v.forEach(item => params.append(k, String(item)));
+      else if (v !== undefined) params.append(k, String(v));
+    }
+  }
+  return params.toString();
+}
+export const encode = stringify;
+export const decode = parse;
+export default { parse, stringify, encode, decode };
+`;
+
+const NODE_STREAM_SHIM = `
+import { EventEmitter } from 'events';
+export class Stream extends EventEmitter { pipe(dest) { return dest; } }
+export class Readable extends Stream { read() { return null; } destroy() { return this; } }
+export class Writable extends Stream { write() { return true; } end() { return this; } destroy() { return this; } }
+export class Duplex extends Stream { read() { return null; } write() { return true; } end() { return this; } }
+export class Transform extends Duplex {}
+export class PassThrough extends Transform {}
+export function pipeline(...args) { const cb = args[args.length - 1]; if (typeof cb === 'function') cb(); return args[args.length - 1]; }
+export function finished(_s, cb) { if (typeof cb === 'function') cb(); return () => {}; }
+export default { Stream, Readable, Writable, Duplex, Transform, PassThrough, pipeline, finished };
+`;
+
+const NODE_OS_SHIM = `
+export const EOL = '\\n';
+export function platform() { return 'browser'; }
+export function arch() { return 'wasm'; }
+export function type() { return 'Browser'; }
+export function release() { return '1.0.0'; }
+export function hostname() { return 'localhost'; }
+export function homedir() { return '/'; }
+export function tmpdir() { return '/tmp'; }
+export function cpus() { return []; }
+export default { EOL, platform, arch, type, release, hostname, homedir, tmpdir, cpus };
+`;
+
+const NODE_FS_SHIM = `
+export function existsSync() { return false; }
+export function readFileSync() { return ''; }
+export function writeFileSync() {}
+export function readdirSync() { return []; }
+export function statSync() { return { isFile: () => false, isDirectory: () => false, size: 0 }; }
+export const promises = {
+  readFile: async () => '',
+  writeFile: async () => {},
+  readdir: async () => [],
+  stat: async () => ({ isFile: () => false, isDirectory: () => false, size: 0 }),
+  mkdir: async () => {},
+};
+export default { existsSync, readFileSync, writeFileSync, readdirSync, statSync, promises };
+`;
+
+const EMPTY_BROWSER_SHIM = `export default {};`;
+const VITE_CLIENT_SHIM = `export function createHotContext() { return { accept() {}, dispose() {}, invalidate() {}, decline() {}, on() {}, off() {}, send() {} }; } export function updateStyle() {} export function removeStyle() {} export default {};`;
+
 const NODE_SHIMS: Record<string, string> = {
   crypto: NODE_CRYPTO_SHIM,
   'node:crypto': NODE_CRYPTO_SHIM,
   path: NODE_PATH_SHIM,
   'node:path': NODE_PATH_SHIM,
   'path/posix': NODE_PATH_SHIM,
+  'node:path/posix': NODE_PATH_SHIM,
   process: NODE_PROCESS_SHIM,
   'node:process': NODE_PROCESS_SHIM,
   events: NODE_EVENTS_SHIM,
   'node:events': NODE_EVENTS_SHIM,
   buffer: NODE_BUFFER_SHIM,
   'node:buffer': NODE_BUFFER_SHIM,
+  url: NODE_URL_SHIM,
+  'node:url': NODE_URL_SHIM,
+  util: NODE_UTIL_SHIM,
+  'node:util': NODE_UTIL_SHIM,
+  assert: NODE_ASSERT_SHIM,
+  'node:assert': NODE_ASSERT_SHIM,
+  'assert/strict': NODE_ASSERT_SHIM,
+  'node:assert/strict': NODE_ASSERT_SHIM,
+  querystring: NODE_QUERYSTRING_SHIM,
+  'node:querystring': NODE_QUERYSTRING_SHIM,
+  string_decoder: 'export class StringDecoder { write(b) { return String(b || ""); } end(b) { return String(b || ""); } } export default { StringDecoder };',
+  'node:string_decoder': 'export class StringDecoder { write(b) { return String(b || ""); } end(b) { return String(b || ""); } } export default { StringDecoder };',
+  stream: NODE_STREAM_SHIM,
+  'node:stream': NODE_STREAM_SHIM,
+  'stream/web': NODE_STREAM_SHIM,
+  'node:stream/web': NODE_STREAM_SHIM,
+  'stream/promises': NODE_STREAM_SHIM,
+  'node:stream/promises': NODE_STREAM_SHIM,
+  os: NODE_OS_SHIM,
+  'node:os': NODE_OS_SHIM,
+  fs: NODE_FS_SHIM,
+  'node:fs': NODE_FS_SHIM,
+  'fs/promises': 'export const readFile = async () => ""; export const writeFile = async () => {}; export const readdir = async () => []; export const stat = async () => ({ isFile: () => false, isDirectory: () => false, size: 0 }); export const mkdir = async () => {}; export default { readFile, writeFile, readdir, stat, mkdir };',
+  'node:fs/promises': 'export const readFile = async () => ""; export const writeFile = async () => {}; export const readdir = async () => []; export const stat = async () => ({ isFile: () => false, isDirectory: () => false, size: 0 }); export const mkdir = async () => {}; export default { readFile, writeFile, readdir, stat, mkdir };',
+  http: EMPTY_BROWSER_SHIM,
+  'node:http': EMPTY_BROWSER_SHIM,
+  https: EMPTY_BROWSER_SHIM,
+  'node:https': EMPTY_BROWSER_SHIM,
+  http2: EMPTY_BROWSER_SHIM,
+  'node:http2': EMPTY_BROWSER_SHIM,
+  zlib: EMPTY_BROWSER_SHIM,
+  'node:zlib': EMPTY_BROWSER_SHIM,
+  tty: 'export function isatty() { return false; } export default { isatty };',
+  'node:tty': 'export function isatty() { return false; } export default { isatty };',
+  net: EMPTY_BROWSER_SHIM,
+  'node:net': EMPTY_BROWSER_SHIM,
+  tls: EMPTY_BROWSER_SHIM,
+  'node:tls': EMPTY_BROWSER_SHIM,
+  dns: EMPTY_BROWSER_SHIM,
+  'node:dns': EMPTY_BROWSER_SHIM,
+  dgram: EMPTY_BROWSER_SHIM,
+  'node:dgram': EMPTY_BROWSER_SHIM,
+  child_process: EMPTY_BROWSER_SHIM,
+  'node:child_process': EMPTY_BROWSER_SHIM,
+  cluster: EMPTY_BROWSER_SHIM,
+  'node:cluster': EMPTY_BROWSER_SHIM,
+  module: 'export function createRequire() { return () => ({}); } export default { createRequire };',
+  'node:module': 'export function createRequire() { return () => ({}); } export default { createRequire };',
+  vm: EMPTY_BROWSER_SHIM,
+  'node:vm': EMPTY_BROWSER_SHIM,
+  readline: EMPTY_BROWSER_SHIM,
+  'node:readline': EMPTY_BROWSER_SHIM,
+  perf_hooks: 'export const performance = globalThis.performance; export default { performance };',
+  'node:perf_hooks': 'export const performance = globalThis.performance; export default { performance };',
+  async_hooks: EMPTY_BROWSER_SHIM,
+  'node:async_hooks': EMPTY_BROWSER_SHIM,
+  diagnostics_channel: EMPTY_BROWSER_SHIM,
+  'node:diagnostics_channel': EMPTY_BROWSER_SHIM,
+  inspector: EMPTY_BROWSER_SHIM,
+  'node:inspector': EMPTY_BROWSER_SHIM,
+  worker_threads: EMPTY_BROWSER_SHIM,
+  'node:worker_threads': EMPTY_BROWSER_SHIM,
+  v8: EMPTY_BROWSER_SHIM,
+  'node:v8': EMPTY_BROWSER_SHIM,
+  constants: EMPTY_BROWSER_SHIM,
+  'node:constants': EMPTY_BROWSER_SHIM,
+  punycode: EMPTY_BROWSER_SHIM,
+  'node:punycode': EMPTY_BROWSER_SHIM,
+  timers: 'export const setTimeout = globalThis.setTimeout; export const clearTimeout = globalThis.clearTimeout; export const setInterval = globalThis.setInterval; export const clearInterval = globalThis.clearInterval; export default { setTimeout, clearTimeout, setInterval, clearInterval };',
+  'node:timers': 'export const setTimeout = globalThis.setTimeout; export const clearTimeout = globalThis.clearTimeout; export const setInterval = globalThis.setInterval; export const clearInterval = globalThis.clearInterval; export default { setTimeout, clearTimeout, setInterval, clearInterval };',
+  'timers/promises': EMPTY_BROWSER_SHIM,
+  'node:timers/promises': EMPTY_BROWSER_SHIM,
+  'vite/client': VITE_CLIENT_SHIM,
+  '@vite/env': VITE_CLIENT_SHIM,
 };
 
 function collectEntryModules(
@@ -512,8 +821,9 @@ export async function bundleProjectInBrowser(
     };
   }
 
-  const aliases = parsePathAliases(rawFileMap);
-  const pkgDeps = parsePkgDependencies(rawFileMap);
+  const { aliases, baseUrls } = parsePathAliases(rawFileMap, entryDir);
+  const pkgDeps = parsePkgDependencies(rawFileMap, entryDir);
+  const workspaceEntries = parseWorkspaceEntries(rawFileMap, runtimeFileMap);
 
   const useSyntheticWrapper = entryModules.length > 1;
   const syntheticWrapperCode = useSyntheticWrapper
@@ -531,6 +841,7 @@ export async function bundleProjectInBrowser(
     if (cleanSpec.startsWith('/')) {
       const rootRel = normalizeRelativePath(cleanSpec.slice(1));
       candidateBases.push(rootRel);
+      candidateBases.push(`public/${rootRel}`);
       if (entryDir) {
         candidateBases.push(joinPosix(entryDir, rootRel));
       }
@@ -549,6 +860,10 @@ export async function bundleProjectInBrowser(
           }
         }
       }
+      for (const baseDir of baseUrls) {
+        const joined = normalizeRelativePath(baseDir ? `${baseDir}/${cleanSpec}` : cleanSpec);
+        candidateBases.push(joined);
+      }
     }
 
     const extsToTry = allowExtensionFallback ? CODE_EXTENSIONS : [''];
@@ -565,6 +880,7 @@ export async function bundleProjectInBrowser(
 
   let tailwindDetected = initialTailwind;
   const externalSpecs = new Set<string>();
+  const externalCssUrls = new Set<string>();
   const collectedCssChunks: string[] = [];
   const processedCssPaths = new Set<string>();
 
@@ -591,6 +907,10 @@ export async function bundleProjectInBrowser(
         const resolvedImport = resolveFromBase(rawFileMap, trimmed, cssDir, false);
         if (resolvedImport) {
           return collectCssRecursive(resolvedImport, visited);
+        }
+        if (!trimmed.startsWith('.') && !trimmed.startsWith('/')) {
+          externalCssUrls.add(buildEsmShCssUrl(trimmed, pkgDeps));
+          return '';
         }
         return full;
       }
@@ -628,9 +948,14 @@ export async function bundleProjectInBrowser(
         const queryParams = new URLSearchParams(queryStr);
         const isRawQuery = queryParams.has('raw') || spec.endsWith('?raw');
         const isUrlQuery = queryParams.has('url') || queryParams.has('inline');
+        const isWorkerQuery = queryParams.has('worker') || queryParams.has('sharedworker');
 
-        if (!hasQuery && NODE_SHIMS[spec]) {
+        if (!hasQuery && (NODE_SHIMS[spec] || spec.startsWith('node:') || spec.startsWith('virtual:'))) {
           return { path: spec, namespace: 've-node-shim' };
+        }
+
+        if (isWorkerQuery) {
+          return { path: cleanSpec, namespace: 've-worker-stub' };
         }
 
         const importerClean =
@@ -679,6 +1004,11 @@ export async function bundleProjectInBrowser(
           return { path: resolvedVfs, namespace: 've-vfs' };
         }
 
+        // 3b. Workspace package imports inside monorepos (e.g. @acme/ui)
+        if (workspaceEntries.has(cleanSpec)) {
+          return { path: workspaceEntries.get(cleanSpec)!, namespace: 've-vfs' };
+        }
+
         if (cleanSpec.startsWith('.') || cleanSpec.startsWith('/')) {
           const candidateRaw = cleanSpec.startsWith('/')
             ? normalizeRelativePath(cleanSpec.slice(1))
@@ -695,7 +1025,17 @@ export async function bundleProjectInBrowser(
           };
         }
 
-        // 4. Bare npm package specifier -> map via <script type="importmap"> to https://esm.sh/
+        // 4. Bare npm package CSS imports (e.g. @mantine/core/styles.css, swiper/css) -> inject as <link rel="stylesheet">
+        if (cleanSpec === 'tailwindcss') {
+          tailwindDetected = true;
+          return { path: cleanSpec, namespace: 've-noop-stub' };
+        }
+        if (isExternalCssSpecifier(cleanSpec)) {
+          externalCssUrls.add(buildEsmShCssUrl(cleanSpec, pkgDeps));
+          return { path: cleanSpec, namespace: 've-noop-stub' };
+        }
+
+        // 5. Bare npm package specifier -> map via <script type="importmap"> to https://esm.sh/
         externalSpecs.add(spec);
         return { path: spec, external: true };
       });
@@ -721,6 +1061,13 @@ export async function bundleProjectInBrowser(
             loader: 'js',
           };
         }
+        if (/\.svg$/i.test(args.path)) {
+          const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`;
+          return {
+            contents: `export default ${JSON.stringify(svgUrl)};`,
+            loader: 'js',
+          };
+        }
         return {
           contents: content,
           loader: 'dataurl',
@@ -729,7 +1076,14 @@ export async function bundleProjectInBrowser(
 
       build.onLoad({ filter: /.*/, namespace: 've-node-shim' }, (args) => {
         return {
-          contents: NODE_SHIMS[args.path] ?? 'export default {};',
+          contents: NODE_SHIMS[args.path] ?? EMPTY_BROWSER_SHIM,
+          loader: 'js',
+        };
+      });
+
+      build.onLoad({ filter: /.*/, namespace: 've-worker-stub' }, () => {
+        return {
+          contents: `export default class MockWorker { postMessage() {} terminate() {} addEventListener() {} removeEventListener() {} }`,
           loader: 'js',
         };
       });
@@ -763,13 +1117,40 @@ export async function bundleProjectInBrowser(
         const fileDir = getDirname(args.path);
         const virtualResolveDir = fileDir ? `/${fileDir}` : '/';
 
-        if (lower.endsWith('.css') || lower.endsWith('.scss')) {
+        if (lower.endsWith('.css') || lower.endsWith('.scss') || lower.endsWith('.sass') || lower.endsWith('.less')) {
           if (!processedCssPaths.has(args.path)) {
             processedCssPaths.add(args.path);
             const expandedCss = collectCssRecursive(args.path, new Set<string>());
             if (expandedCss.trim()) {
               collectedCssChunks.push(expandedCss);
             }
+          }
+          if (/\.module\.(css|scss|sass|less)$/i.test(lower)) {
+            const classNames = new Set<string>();
+            const strippedCss = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/url\([^)]*\)/gi, '');
+            const clsRegex = /\.([A-Za-z_-][A-Za-z0-9_-]*)/g;
+            let clsMatch: RegExpExecArray | null;
+            while ((clsMatch = clsRegex.exec(strippedCss)) !== null) {
+              classNames.add(clsMatch[1]);
+            }
+            const mapObj: Record<string, string> = {};
+            const namedExports: string[] = [];
+            const reserved = new Set([
+              'default', 'class', 'function', 'return', 'const', 'let', 'var', 'if', 'else',
+              'for', 'while', 'do', 'switch', 'case', 'break', 'continue', 'new', 'delete',
+              'typeof', 'void', 'in', 'of', 'with', 'try', 'catch', 'finally', 'throw',
+              'import', 'export', 'extends', 'super', 'this', 'true', 'false', 'null',
+            ]);
+            for (const cls of classNames) {
+              mapObj[cls] = cls;
+              if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(cls) && !reserved.has(cls)) {
+                namedExports.push(`export const ${cls} = ${JSON.stringify(cls)};`);
+              }
+            }
+            const moduleJs = `${namedExports.join('\n')}
+const __stylesMap = ${JSON.stringify(mapObj)};
+export default new Proxy(__stylesMap, { get(t, p) { return typeof p === 'string' ? (p in t ? t[p] : p) : undefined; } });`;
+            return { contents: moduleJs, loader: 'js', resolveDir: virtualResolveDir };
           }
           return { contents: 'export default {};', loader: 'js', resolveDir: virtualResolveDir };
         }
@@ -820,6 +1201,7 @@ export async function bundleProjectInBrowser(
     return {
       js: js.trim(),
       css: css.trim(),
+      ...(externalCssUrls.size > 0 ? { externalCssUrls: Array.from(externalCssUrls) } : {}),
       replacedScriptSrcs,
       hasInlineModuleReplacement,
       usesTailwind: tailwindDetected,

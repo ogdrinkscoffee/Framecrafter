@@ -10,6 +10,7 @@ import {
   duplicateElementInHtml,
   ensureElementNodeAttr,
   ensureStylesheetLinkInHtml,
+  extractElementHtmlByVeId,
   getTableMetricsInHtml,
   insertHtmlSnippet,
   listHtmlElementIds,
@@ -32,18 +33,38 @@ import {
   undoHistoryState,
 } from './historyManager';
 import {
+  buildProjectAssetUrlMap,
   buildSrcDoc,
   detectFileType,
   detectProjectTitleFromUpload,
+  extractHotPatchPayload,
   findEntryHtmlPath,
   isNonRuntimeBundleFile,
   needsModuleBundling,
   normalizeUploadedFiles,
+  rewriteCssAssetUrls,
+  rewriteHtmlAssetRefs,
   shouldIgnoreUploadPath,
 } from './projectBundler';
+import {
+  buildGoogleFontsHref,
+  collectUsedGoogleFonts,
+  ensureGoogleFontInHtml,
+  matchStudioFontOption,
+  STUDIO_FONT_CATALOG,
+} from './fontLibrary';
 import { bundleProjectInBrowser } from './browserBundler';
 import { buildProjectFileTree, getFileBadgeStyle } from './fileTree';
+import { writeProjectFilesToDirectory } from './fileSystemSync';
 import {
+  computeFilesFingerprint,
+  decodeGitHubBlobToProjectContent,
+  encodeProjectFileForGitHubBlob,
+  mergeUpstreamFilesWithWorkspace,
+  parseGitHubRepoUrl,
+} from './githubSync';
+import {
+  applyRuntimeAttrPatchToFiles,
   applyRuntimeStylePatchToFiles,
   applyRuntimeTextPatchToFiles,
 } from './reactVisualSync';
@@ -69,6 +90,12 @@ import {
   matchShortcutAction,
 } from './shortcuts';
 import { findElementSourceLocation, insertQuickComponentInProject } from './codeSync';
+import {
+  createSlidingWindowRateLimiter,
+  validateBundleProjectPayload,
+  validateGithubPullPayload,
+  validateGithubPushPayload,
+} from './serverValidation';
 import type { SelectedElementInfo } from '../types/editor';
 
 test('scanHtmlElements indexes body elements and skips head/script/style', () => {
@@ -981,4 +1008,395 @@ test('getFileBadgeStyle color-codes project extensions and buildProjectFileTree 
     assert.equal(tree[1].children[1].kind, 'file');
     assert.equal(tree[1].children[1].name, 'App.tsx');
   }
+});
+
+test('local/public images, SVGs, CSS background urls, and React runtime img attrs resolve inside preview', () => {
+  const pngDataUrl =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const files = normalizeUploadedFiles([
+    {
+      path: 'my-site/index.html',
+      name: 'index.html',
+      content:
+        '<!doctype html><html><head><link rel="icon" href="/favicon.png" /><link rel="stylesheet" href="styles.css" /></head><body><img src="/hero.png" alt="Hero" /><img src="./assets/mark.svg" alt="Mark" /></body></html>',
+    },
+    {
+      path: 'my-site/styles.css',
+      name: 'styles.css',
+      content: '.banner { background-image: url("./assets/mark.svg"); }',
+    },
+    {
+      path: 'my-site/public/hero.png',
+      name: 'hero.png',
+      content: pngDataUrl,
+      blobUrl: 'blob:http://localhost:3000/hero',
+    },
+    {
+      path: 'my-site/public/favicon.png',
+      name: 'favicon.png',
+      content: pngDataUrl,
+    },
+    {
+      path: 'my-site/assets/mark.svg',
+      name: 'mark.svg',
+      content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>',
+    },
+  ]);
+
+  const assetMap = buildProjectAssetUrlMap(files, 'index.html');
+  assert.equal(assetMap['/hero.png'], pngDataUrl);
+  assert.ok(assetMap['assets/mark.svg'].startsWith('data:image/svg+xml'));
+
+  const rewrittenCss = rewriteCssAssetUrls(
+    '.banner { background-image: url("./assets/mark.svg"); }',
+    'styles.css',
+    assetMap,
+    'index.html'
+  );
+  assert.ok(rewrittenCss.includes('data:image/svg+xml'));
+
+  const rewrittenHtml = rewriteHtmlAssetRefs(
+    '<img src="/hero.png" alt="Hero" />',
+    'index.html',
+    assetMap
+  );
+  assert.ok(rewrittenHtml.includes(pngDataUrl));
+  assert.ok(rewrittenHtml.includes('data-ve-raw-src="/hero.png"'));
+
+  const srcDoc = buildSrcDoc(files, 'index.html', buildIframeBridgeMarkup('edit', null));
+  assert.ok(srcDoc.includes('window.__PROJECT_ASSETS__'));
+  assert.ok(srcDoc.includes('window.__resolveProjectAsset__'));
+  assert.ok(srcDoc.includes(pngDataUrl));
+
+  // React runtime attribute patching persists image src/alt updates
+  const reactFiles = [
+    { path: 'src/main.tsx', name: 'main.tsx', type: 'js' as const, content: 'console.log("app");' },
+  ];
+  const patchedReact = applyRuntimeAttrPatchToFiles(reactFiles, '#hero-img', {
+    src: '/hero.png',
+    alt: 'Updated Banner',
+  });
+  const runtimeOverrideFile = patchedReact.find((f) =>
+    f.content.includes('@framecraft-attr-map')
+  );
+  assert.ok(runtimeOverrideFile);
+  assert.ok(runtimeOverrideFile.content.includes('Updated Banner'));
+});
+
+test('writeProjectFilesToDirectory decodes binary base64 assets back into Uint8Array', async () => {
+  const written: Array<{ path: string; data: unknown }> = [];
+  const makeDirHandle = (prefix: string) => ({
+    name: prefix,
+    async getDirectoryHandle(name: string) {
+      return makeDirHandle(`${prefix}/${name}`);
+    },
+    async getFileHandle(name: string) {
+      return {
+        async createWritable() {
+          return {
+            async write(data: unknown) {
+              written.push({ path: `${prefix}/${name}`, data });
+            },
+            async close() {},
+          };
+        },
+      };
+    },
+  });
+
+  const pngBase64 = 'data:image/png;base64,iVBORw0KGgo=';
+  const res = await writeProjectFilesToDirectory(makeDirHandle('root'), [
+    { path: 'public/logo.png', name: 'logo.png', type: 'other', content: pngBase64 },
+    { path: 'index.html', name: 'index.html', type: 'html', content: '<html></html>' },
+  ]);
+
+  assert.equal(res.ok, true);
+  const logoWrite = written.find((w) => w.path.endsWith('/logo.png'));
+  assert.ok(logoWrite?.data instanceof Uint8Array);
+  assert.equal(written.find((w) => w.path.endsWith('/index.html'))?.data, '<html></html>');
+});
+
+test('parseGitHubRepoUrl, GitHub blob encoding/decoding, and computeFilesFingerprint work without keys', () => {
+  const fullUrl = parseGitHubRepoUrl('https://github.com/acme-org/studio-app.git');
+  assert.equal(fullUrl.ok, true);
+  if (fullUrl.ok) {
+    assert.equal(fullUrl.data.owner, 'acme-org');
+    assert.equal(fullUrl.data.repo, 'studio-app');
+    assert.equal(fullUrl.data.repoFullName, 'acme-org/studio-app');
+  }
+
+  const branchUrl = parseGitHubRepoUrl('https://github.com/acme-org/studio-app/tree/feature/ui');
+  assert.equal(branchUrl.ok, true);
+  if (branchUrl.ok) {
+    assert.equal(branchUrl.data.branch, 'feature/ui');
+  }
+
+  const shortUrl = parseGitHubRepoUrl('acme-org/studio-app');
+  assert.equal(shortUrl.ok, true);
+
+  const nonGithub = parseGitHubRepoUrl('https://evil.example.com/owner/repo');
+  assert.equal(nonGithub.ok, false);
+
+  const encodedPng = encodeProjectFileForGitHubBlob({
+    path: 'public/hero.png',
+    name: 'hero.png',
+    type: 'other',
+    content: 'data:image/png;base64,AQID',
+  });
+  assert.equal(encodedPng.encoding, 'base64');
+  assert.equal(encodedPng.content, 'AQID');
+  assert.equal(
+    decodeGitHubBlobToProjectContent('public/hero.png', 'AQID'),
+    'data:image/png;base64,AQID'
+  );
+
+  const encodedHtml = encodeProjectFileForGitHubBlob({
+    path: 'index.html',
+    name: 'index.html',
+    type: 'html',
+    content: '<h1>Hello</h1>',
+  });
+  assert.equal(encodedHtml.encoding, 'utf-8');
+
+  const fp1 = computeFilesFingerprint([
+    { path: 'index.html', name: 'index.html', type: 'html', content: '<h1>A</h1>' },
+  ]);
+  const fp2 = computeFilesFingerprint([
+    { path: 'index.html', name: 'index.html', type: 'html', content: '<h1>B</h1>' },
+  ]);
+  assert.notEqual(fp1, fp2);
+});
+
+test('serverValidation enforces payload schemas and sliding-window rate limits', () => {
+  assert.equal(validateBundleProjectPayload(null).ok, false);
+  assert.equal(validateBundleProjectPayload({ entryPath: '', files: [] }).ok, false);
+  const validBundle = validateBundleProjectPayload({
+    entryPath: 'index.html',
+    files: [{ path: 'index.html', content: '<h1>Hi</h1>', type: 'html' }],
+  });
+  assert.equal(validBundle.ok, true);
+
+  assert.equal(
+    validateGithubPullPayload({ repoUrl: 'https://github.com/a/b', branch: '../bad' }).ok,
+    false
+  );
+  assert.equal(
+    validateGithubPullPayload({ repoUrl: 'https://github.com/a/b', branch: 'main' }).ok,
+    true
+  );
+
+  assert.equal(
+    validateGithubPushPayload({
+      repoUrl: 'https://github.com/a/b',
+      commitMessage: 'x'.repeat(501),
+      files: [{ path: 'a.html', content: '<p>ok</p>' }],
+    }).ok,
+    false
+  );
+  assert.equal(
+    validateGithubPushPayload({
+      repoUrl: 'https://github.com/a/b',
+      commitMessage: 'Update index',
+      files: [{ path: 'index.html', name: 'index.html', type: 'html', content: '<p>ok</p>' }],
+    }).ok,
+    true
+  );
+
+  const limiter = createSlidingWindowRateLimiter({ maxRequests: 2, windowMs: 1000 });
+  assert.equal(limiter.check('127.0.0.1', 100).allowed, true);
+  assert.equal(limiter.check('127.0.0.1', 200).allowed, true);
+  const blocked = limiter.check('127.0.0.1', 300);
+  assert.equal(blocked.allowed, false);
+  assert.ok(blocked.retryAfterSec >= 1);
+  assert.equal(limiter.check('127.0.0.1', 1300).allowed, true);
+});
+
+test('mergeUpstreamFilesWithWorkspace applies upstream changes while preserving extra local files', () => {
+  const localFiles = [
+    { path: 'index.html', name: 'index.html', type: 'html' as const, content: '<h1>Local Old</h1>' },
+    { path: 'src/local-notes.md', name: 'local-notes.md', type: 'other' as const, content: 'Keep me' },
+  ];
+  const upstreamFiles = [
+    { path: 'index.html', name: 'index.html', type: 'html' as const, content: '<h1>Upstream New</h1>' },
+    { path: 'styles.css', name: 'styles.css', type: 'css' as const, content: 'body { color: #111; }' },
+  ];
+
+  const outcome = mergeUpstreamFilesWithWorkspace(localFiles, upstreamFiles);
+  assert.equal(outcome.updatedCount, 2);
+  assert.equal(outcome.preservedLocalCount, 1);
+  assert.deepEqual(
+    outcome.merged.map((f) => f.path),
+    ['index.html', 'src/local-notes.md', 'styles.css']
+  );
+  assert.equal(outcome.merged.find((f) => f.path === 'index.html')?.content, '<h1>Upstream New</h1>');
+  assert.equal(outcome.merged.find((f) => f.path === 'src/local-notes.md')?.content, 'Keep me');
+});
+
+test('fontLibrary catalogs 25+ fonts, matches CSS families, and injects Google Fonts links safely', () => {
+  assert.ok(STUDIO_FONT_CATALOG.length >= 25);
+  const fraunces = matchStudioFontOption('"Fraunces", Georgia, serif');
+  assert.equal(fraunces?.id, 'fraunces');
+  assert.equal(fraunces?.category, 'Editorial Serif');
+
+  const used = collectUsedGoogleFonts([
+    '<h1 style="font-family: \'Playfair Display\', serif">Hello</h1>',
+    'body { font-family: "DM Sans", sans-serif; }',
+  ]);
+  assert.ok(used.some((f) => f.includes('Playfair+Display')));
+  assert.ok(used.some((f) => f.includes('DM+Sans')));
+
+  const href = buildGoogleFontsHref(used);
+  assert.ok(href && href.startsWith('https://fonts.googleapis.com/css2?'));
+
+  const baseHtml = '<!doctype html><html><head><title>App</title></head><body><h1>Hi</h1></body></html>';
+  const withFont = ensureGoogleFontInHtml(baseHtml, '"Syne", sans-serif');
+  assert.ok(withFont.includes('family=Syne'));
+  assert.equal(ensureGoogleFontInHtml(withFont, '"Syne", sans-serif'), withFont);
+});
+
+test('matchShortcutAction supports Adobe/MS365/Figma editing shortcuts including arrows, clipboard, layers, zoom, and command palette', () => {
+  const base = {
+    editorMode: 'edit' as const,
+    hasSelectedElement: true,
+    hasOpenModal: false,
+    isTyping: false,
+  };
+
+  assert.equal(matchShortcutAction({ key: 'k', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'open-command-palette');
+  assert.equal(matchShortcutAction({ key: 'ArrowRight', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'nudge-right');
+  assert.equal(matchShortcutAction({ key: 'ArrowLeft', ctrlKey: false, metaKey: false, shiftKey: true, altKey: false }, base), 'nudge-left-10');
+  assert.equal(matchShortcutAction({ key: 'ArrowUp', ctrlKey: false, metaKey: false, shiftKey: true, altKey: false }, base), 'nudge-up-10');
+  assert.equal(matchShortcutAction({ key: 'ArrowDown', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'nudge-down');
+  assert.equal(matchShortcutAction({ key: 'c', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'copy-element');
+  assert.equal(matchShortcutAction({ key: 'x', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'cut-element');
+  assert.equal(matchShortcutAction({ key: 'v', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'paste-element');
+  assert.equal(matchShortcutAction({ key: 'c', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, base), 'copy-style');
+  assert.equal(matchShortcutAction({ key: 'v', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, base), 'paste-style');
+  assert.equal(matchShortcutAction({ key: ']', code: 'BracketRight', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'bring-forward');
+  assert.equal(matchShortcutAction({ key: '[', code: 'BracketLeft', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'send-backward');
+  assert.equal(matchShortcutAction({ key: '\\', code: 'Backslash', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'toggle-zen');
+  assert.equal(matchShortcutAction({ key: 'h', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, base), 'toggle-visibility');
+  assert.equal(matchShortcutAction({ key: 'l', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'toggle-aspect-lock');
+  assert.equal(matchShortcutAction({ key: 'e', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false }, base), 'align-center');
+  assert.equal(matchShortcutAction({ key: 'u', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'format-underline');
+  assert.equal(matchShortcutAction({ key: '!', code: 'Digit1', ctrlKey: false, metaKey: false, shiftKey: true, altKey: false }, base), 'zoom-fit');
+  assert.equal(matchShortcutAction({ key: '0', code: 'Digit0', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'zoom-100');
+  assert.equal(matchShortcutAction({ key: '=', code: 'Equal', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'zoom-in');
+  assert.equal(matchShortcutAction({ key: '-', code: 'Minus', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false }, base), 'zoom-out');
+  assert.equal(matchShortcutAction({ key: 'v', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'mode-edit');
+  assert.equal(matchShortcutAction({ key: 'g', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'toggle-outlines');
+  assert.equal(matchShortcutAction({ key: 'Enter', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false }, base), 'edit-text');
+  assert.equal(matchShortcutAction({ key: 'Enter', ctrlKey: false, metaKey: false, shiftKey: true, altKey: false }, base), 'select-parent');
+});
+
+test('extractElementHtmlByVeId, extractHotPatchPayload, and 6 categorized starter templates work cleanly', () => {
+  assert.equal(SAMPLE_TEMPLATES.length, 6);
+  for (const tpl of SAMPLE_TEMPLATES) {
+    assert.ok(tpl.category, `Template ${tpl.id} should have a category`);
+  }
+
+  const html = '<!doctype html><html><head><title>Demo</title><link rel="stylesheet" href="styles.css"></head><body><section id="card" data-ve-node="n-1"><h2>Card</h2></section></body></html>';
+  const copied = extractElementHtmlByVeId(html, 've-0');
+  assert.ok(copied);
+  assert.ok(copied!.includes('id="card-copy"'));
+  assert.ok(!copied!.includes('data-ve-node'));
+
+  const payload = extractHotPatchPayload(SAMPLE_TEMPLATES[2].files, 'index.html');
+  assert.ok(payload);
+  assert.ok(payload!.bodyHtml.includes('data-ve-id='));
+  assert.ok(payload!.cssSources['styles.css'] !== undefined);
+  assert.ok(payload!.googleFontHref && payload!.googleFontHref.includes('https://fonts.googleapis.com'));
+});
+
+test('bundleProjectInBrowser handles external package CSS, CSS modules, tsconfig.app.json baseUrl, virtual/vite shims, and importmap merging', async () => {
+  const files = normalizeUploadedFiles([
+    {
+      path: 'mantine-app/index.html',
+      name: 'index.html',
+      content:
+        '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="script-src \'self\'"><script type="importmap">{"imports":{"custom-pkg":"https://esm.sh/custom-pkg@1.0.0"}}</script><title>App</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>',
+    },
+    {
+      path: 'mantine-app/package.json',
+      name: 'package.json',
+      content: JSON.stringify({
+        name: 'mantine-app',
+        dependencies: {
+          react: '^19.2.0',
+          'react-dom': '^19.2.0',
+          '@mantine/core': '9.8.1',
+          swiper: '^11.0.0',
+        },
+      }),
+    },
+    {
+      path: 'mantine-app/tsconfig.json',
+      name: 'tsconfig.json',
+      content: JSON.stringify({ files: [], references: [{ path: './tsconfig.app.json' }] }),
+    },
+    {
+      path: 'mantine-app/tsconfig.app.json',
+      name: 'tsconfig.app.json',
+      content: JSON.stringify({
+        compilerOptions: {
+          baseUrl: 'src',
+          paths: { '@/*': ['./*'] },
+        },
+      }),
+    },
+    {
+      path: 'mantine-app/src/components/Welcome.module.css',
+      name: 'Welcome.module.css',
+      content: '.title { color: #38bdf8; } .hero-badge { font-weight: 700; }',
+    },
+    {
+      path: 'mantine-app/src/utils/env.ts',
+      name: 'env.ts',
+      content: 'import "vite/client";\nimport "virtual:pwa-register";\nimport fs from "node:fs";\nexport const hasFs = typeof fs.existsSync === "function";',
+    },
+    {
+      path: 'mantine-app/src/App.tsx',
+      name: 'App.tsx',
+      content: [
+        'import "@mantine/core/styles.css";',
+        'import "swiper/css";',
+        'import { MantineProvider } from "@mantine/core";',
+        'import classes from "components/Welcome.module.css";',
+        'import { hasFs } from "@/utils/env";',
+        'export default function App() {',
+        '  return <MantineProvider><h1 className={classes.title} data-fs={String(hasFs)}>Hi</h1></MantineProvider>;',
+        '}',
+      ].join('\n'),
+    },
+    {
+      path: 'mantine-app/src/main.tsx',
+      name: 'main.tsx',
+      content: 'import ReactDOM from "react-dom/client";\nimport App from "./App";\nReactDOM.createRoot(document.getElementById("root")!).render(<App />);',
+    },
+  ]);
+
+  const bundle = await bundleProjectInBrowser(files, 'index.html');
+  assert.equal(bundle.error, undefined);
+  assert.ok(bundle.importMap);
+  // Stylesheets must NEVER enter importMap as ES module imports (causes strict MIME text/css error)
+  assert.equal(bundle.importMap!['@mantine/core/styles.css'], undefined);
+  assert.equal(bundle.importMap!['swiper/css'], undefined);
+  assert.equal(bundle.importMap!['vite/client'], undefined);
+  assert.equal(bundle.importMap!['virtual:pwa-register'], undefined);
+  assert.equal(bundle.importMap!['node:fs'], undefined);
+  assert.equal(bundle.importMap!['components/Welcome.module.css'], undefined);
+  assert.equal(bundle.importMap!['@mantine/core'], 'https://esm.sh/@mantine/core@9.8.1?external=react,react-dom');
+
+  assert.ok(bundle.externalCssUrls && bundle.externalCssUrls.includes('https://esm.sh/@mantine/core@9.8.1/styles.css'));
+  assert.ok(bundle.externalCssUrls!.includes('https://esm.sh/swiper@11.0.0/css'));
+  assert.ok(bundle.js && !bundle.js.includes('@mantine/core/styles.css'));
+  assert.ok(bundle.js && bundle.js.includes('"title"'));
+
+  const srcDoc = buildSrcDoc(files, 'index.html', '', bundle);
+  assert.ok(!/<meta\b[^>]*Content-Security-Policy/i.test(srcDoc));
+  assert.equal((srcDoc.match(/<script type="importmap"/g) ?? []).length, 1);
+  assert.ok(srcDoc.includes('https://esm.sh/custom-pkg@1.0.0'));
+  assert.ok(srcDoc.includes('<link rel="stylesheet" href="https://esm.sh/@mantine/core@9.8.1/styles.css" data-ve-internal="external-css" />'));
+  assert.ok(srcDoc.includes('<link rel="stylesheet" href="https://esm.sh/swiper@11.0.0/css" data-ve-internal="external-css" />'));
+  assert.ok(srcDoc.includes('diagnoseFailureAndReport'));
 });

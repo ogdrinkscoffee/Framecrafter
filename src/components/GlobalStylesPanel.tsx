@@ -71,22 +71,22 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#111114]">
-      <div className="px-4 py-3 border-b border-white/[0.08] bg-[#111114] flex items-center justify-between shrink-0">
+    <div className="flex-1 flex flex-col min-h-0 bg-[var(--studio-surface)]">
+      <div className="px-4 py-3 border-b border-[var(--studio-border)] bg-[var(--studio-surface)] flex items-center justify-between shrink-0">
         <div className="min-w-0">
           <h2 className="studio-section-header">:root Theme Variables</h2>
-          <p className="text-[12px] text-zinc-400 font-mono-tabular truncate mt-0.5">
+          <p className="text-[12px] text-[var(--studio-muted)] font-mono-tabular truncate mt-0.5">
             {cssPath || 'styles.css (will be created)'}
           </p>
         </div>
-        <Palette className="w-4 h-4 text-cyan-400 shrink-0" strokeWidth={1.5} />
+        <Palette className="w-4 h-4 text-cyan-600 dark:text-cyan-400 shrink-0" strokeWidth={1.5} />
       </div>
 
       <div className="flex-1 overflow-y-auto builder-scroll p-4 space-y-4">
         {variables.length === 0 ? (
-          <div className="rounded-xl border border-white/[0.08] bg-[#18181b] studio-card-highlight p-4 text-center space-y-1.5">
-            <p className="text-[12.5px] font-medium text-[#e4e4e7]">No :root CSS variables found</p>
-            <p className="text-[11.5px] text-zinc-400 leading-relaxed">
+          <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-elevated)] studio-card-highlight p-4 text-center space-y-1.5">
+            <p className="text-[12.5px] font-medium text-[var(--studio-text)]">No :root CSS variables found</p>
+            <p className="text-[11.5px] text-[var(--studio-muted)] leading-relaxed">
               Add a CSS custom property below to define global theme tokens across your project.
             </p>
           </div>
@@ -99,12 +99,12 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
               return (
                 <div
                   key={entry.name}
-                  className="p-2.5 rounded-xl border border-white/[0.08] bg-[#18181b] studio-card-highlight space-y-2"
+                  className="p-2.5 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-elevated)] studio-card-highlight space-y-2"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <label
                       htmlFor={`cssvar-${entry.name}`}
-                      className="text-[12px] font-mono-tabular font-medium text-cyan-300 truncate"
+                      className="text-[12px] font-mono-tabular font-medium text-cyan-700 dark:text-cyan-300 truncate"
                       title={entry.name}
                     >
                       {entry.name}
@@ -114,16 +114,16 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
                       onClick={() => onDeleteRootVar(entry.name)}
                       aria-label={`Delete variable ${entry.name}`}
                       title={`Delete ${entry.name}`}
-                      className="p-1 rounded-md text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                      className="p-1 rounded-md text-[var(--studio-muted-soft)] hover:text-red-500 dark:hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
                     >
                       <Trash2 className="w-3.5 h-3.5" strokeWidth={1.5} />
                     </button>
                   </div>
 
                   {entry.kind === 'color' ? (
-                    <div className="flex items-center gap-2 rounded-lg bg-[#09090b] border border-white/[0.08] px-2 py-1 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/60">
+                    <div className="flex items-center gap-2 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2 py-1 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/60">
                       <label
-                        className="relative w-5 h-5 rounded-md border border-white/[0.15] shrink-0 overflow-hidden cursor-pointer shadow-xs"
+                        className="relative w-5 h-5 rounded-md border border-[var(--studio-border-strong)] shrink-0 overflow-hidden cursor-pointer shadow-xs"
                         style={{ backgroundColor: hex }}
                         title="Pick color"
                       >
@@ -154,7 +154,7 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
                             onCommitRootVar(entry.name, val, `Update ${entry.name}`);
                           }
                         }}
-                        className="flex-1 min-w-0 bg-transparent text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none"
+                        className="flex-1 min-w-0 bg-transparent text-[12px] font-mono-tabular text-[var(--studio-text)] focus:outline-none"
                       />
                     </div>
                   ) : entry.kind === 'font' ? (
@@ -169,7 +169,7 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
                           onPreviewRootVar(entry.name, nextVal);
                           onCommitRootVar(entry.name, nextVal, `Update ${entry.name}`);
                         }}
-                        className="w-full rounded-lg bg-[#09090b] border border-white/[0.08] px-2 py-1.5 text-[12px] text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                        className="w-full rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2 py-1.5 text-[12px] text-[var(--studio-text)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                       >
                         {FONT_STACK_PRESETS.map((preset) => (
                           <option key={preset.label} value={preset.value}>
@@ -194,7 +194,7 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
                             onCommitRootVar(entry.name, val, `Update ${entry.name}`);
                           }
                         }}
-                        className="w-full rounded-lg bg-[#09090b] border border-white/[0.08] px-2 py-1 text-[11.5px] font-mono-tabular text-zinc-300 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                        className="w-full rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2 py-1 text-[11.5px] font-mono-tabular text-[var(--studio-text-secondary)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                       />
                     </div>
                   ) : (
@@ -217,7 +217,7 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
                           onCommitRootVar(entry.name, val, `Update ${entry.name}`);
                         }
                       }}
-                      className="w-full rounded-lg bg-[#09090b] border border-white/[0.08] px-2 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                      className="w-full rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
                     />
                   )}
                 </div>
@@ -229,7 +229,7 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
         {/* Add Variable Form */}
         <form
           onSubmit={handleAddVar}
-          className="pt-3.5 border-t border-white/[0.08] space-y-2.5"
+          className="pt-3.5 border-t border-[var(--studio-border)] space-y-2.5"
         >
           <div className="studio-section-header">Add :root Variable</div>
           <div className="grid grid-cols-2 gap-2">
@@ -239,7 +239,7 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
               value={newVarName}
               onChange={(e) => setNewVarName(e.target.value)}
               placeholder="--brand-gold"
-              className="rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+              className="rounded-lg bg-[var(--studio-elevated)] border border-[var(--studio-border)] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
             />
             <input
               type="text"
@@ -247,7 +247,7 @@ export const GlobalStylesPanel: React.FC<GlobalStylesPanelProps> = ({
               value={newVarValue}
               onChange={(e) => setNewVarValue(e.target.value)}
               placeholder="#f59e0b"
-              className="rounded-lg bg-[#18181b] border border-white/[0.08] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[#e4e4e7] placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+              className="rounded-lg bg-[var(--studio-elevated)] border border-[var(--studio-border)] studio-card-highlight px-2.5 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
             />
           </div>
           <button

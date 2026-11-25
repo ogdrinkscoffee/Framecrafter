@@ -60,21 +60,21 @@ export const DomOutlineTree: React.FC<DomOutlineTreeProps> = ({
   return (
     <section
       aria-label="Page DOM Hierarchy Tree"
-      className="border-b border-white/[0.08] bg-[#111114]"
+      className="border-b border-[var(--studio-border)] bg-[var(--studio-surface)]"
       onMouseLeave={() => onHoverNode(null)}
     >
-      <div className="px-3.5 py-2 flex items-center justify-between border-b border-white/[0.06]">
+      <div className="h-8 px-3 flex items-center justify-between border-b border-[var(--studio-border-subtle)]">
         <span className="studio-section-header flex items-center gap-1.5">
-          <Layers className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />
+          <Layers className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" strokeWidth={1.4} />
           DOM Hierarchy
         </span>
-        <span className="text-[11px] font-mono-tabular text-zinc-500">
+        <span className="text-[11px] font-mono-tabular text-[var(--studio-muted-soft)]">
           {nodes.length} root{nodes.length === 1 ? '' : 's'}
         </span>
       </div>
 
       {nodes.length === 0 ? (
-        <div className="px-3 py-4 text-[11px] text-zinc-500 text-center">
+        <div className="px-3 py-4 text-[11px] text-[var(--studio-muted-soft)] text-center">
           Switch to Live Canvas to inspect page elements.
         </div>
       ) : (
@@ -130,8 +130,8 @@ const TreeBranch: React.FC<TreeBranchProps> = ({
       <div
         className={`group flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] transition-colors ${
           isSelected
-            ? 'bg-indigo-500/18 text-white ring-1 ring-indigo-500/40'
-            : 'text-[#e4e4e7] hover:bg-[#18181b] hover:text-white'
+            ? 'bg-indigo-500/18 text-[var(--studio-text-strong)] ring-1 ring-indigo-500/40'
+            : 'text-[var(--studio-text)] hover:bg-[var(--studio-elevated)] hover:text-[var(--studio-text-strong)]'
         }`}
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
         onMouseEnter={() => onHoverNode(targetId)}
@@ -144,7 +144,7 @@ const TreeBranch: React.FC<TreeBranchProps> = ({
               onToggle(node.nodeKey);
             }}
             aria-label={isCollapsed ? `Expand ${node.tagName}` : `Collapse ${node.tagName}`}
-            className="p-0.5 rounded text-zinc-500 hover:text-zinc-200 shrink-0 cursor-pointer"
+            className="p-0.5 rounded text-[var(--studio-muted-soft)] hover:text-[var(--studio-text-strong)] shrink-0 cursor-pointer"
           >
             {isCollapsed ? (
               <ChevronRight className="w-3 h-3" strokeWidth={1.5} />
@@ -164,22 +164,24 @@ const TreeBranch: React.FC<TreeBranchProps> = ({
         >
           <span
             className={`font-mono-tabular text-[11.5px] font-medium shrink-0 ${
-              isSelected ? 'text-indigo-300' : 'text-cyan-400'
+              isSelected
+                ? 'text-indigo-700 dark:text-indigo-300'
+                : 'text-cyan-700 dark:text-cyan-400'
             }`}
           >
             &lt;{node.tagName}&gt;
           </span>
           {node.idAttr ? (
-            <span className="font-mono-tabular text-[11.5px] text-amber-300 truncate">
+            <span className="font-mono-tabular text-[11.5px] text-amber-700 dark:text-amber-300 truncate">
               #{node.idAttr}
             </span>
           ) : node.classPreview ? (
-            <span className="font-mono-tabular text-[11.5px] text-zinc-400 truncate">
+            <span className="font-mono-tabular text-[11.5px] text-[var(--studio-muted)] truncate">
               .{node.classPreview}
             </span>
           ) : null}
           {node.textPreview && (
-            <span className="text-[10.5px] text-zinc-500 truncate ml-auto max-w-28">
+            <span className="text-[10.5px] text-[var(--studio-muted-soft)] truncate ml-auto max-w-28">
               &ldquo;{node.textPreview}&rdquo;
             </span>
           )}
@@ -187,7 +189,7 @@ const TreeBranch: React.FC<TreeBranchProps> = ({
       </div>
 
       {hasChildren && !isCollapsed && (
-        <div className="ml-2 border-l border-white/[0.06]">
+        <div className="ml-2 border-l border-[var(--studio-border-subtle)]">
           {node.children.map((child) => (
             <TreeBranch
               key={child.nodeKey}

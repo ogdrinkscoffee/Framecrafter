@@ -66,17 +66,17 @@ function serializeOverrideCssBlocks(map: Map<string, Record<string, string>>): s
   return blocks.join('\n\n') + (blocks.length > 0 ? '\n' : '');
 }
 
-function ensureCssImportedInEntry(files: ProjectFile[], cssPath: string): ProjectFile[] {
-  const cssFileName = cssPath.split('/').pop() || cssPath;
-  const entryCandidates = cssPath.startsWith('src/')
+function ensureCssImportedInEntry(files: ProjectFile[], assetPath: string): ProjectFile[] {
+  const fileName = assetPath.split('/').pop() || assetPath;
+  const entryCandidates = assetPath.startsWith('src/')
     ? ['src/main.tsx', 'src/main.ts', 'src/main.jsx', 'src/main.js', 'src/index.tsx', 'src/index.ts', 'src/index.jsx', 'src/index.js']
     : ['main.tsx', 'main.ts', 'main.jsx', 'main.js', 'index.tsx', 'index.ts', 'index.jsx', 'index.js'];
 
   const entryFile = files.find((f) => entryCandidates.includes(f.path));
   if (!entryFile) return files;
-  if (entryFile.content.includes(cssFileName)) return files;
+  if (entryFile.content.includes(fileName)) return files;
 
-  const importLine = `import './${cssFileName}';\n`;
+  const importLine = `import './${fileName}';\n`;
   return files.map((f) =>
     f.path === entryFile.path ? { ...f, content: `${f.content.trimEnd()}\n${importLine}` } : f
   );
@@ -226,12 +226,35 @@ function parseRuntimeTextMap(jsContent: string): Record<string, string> {
   }
 }
 
-function serializeRuntimeTextScript(map: Record<string, string>): string {
-  const cleanJson = JSON.stringify(map, null, 2);
-  return `/* Framecraft Visual Text Overrides */
-const FRAMECRAFT_TEXT_OVERRIDES = /* @framecraft-text-map */ ${cleanJson} /* /@framecraft-text-map */;
+function parseRuntimeAttrMap(jsContent: string): Record<string, Record<string, string | null>> {
+  const marker = '/* @framecraft-attr-map */';
+  const idx = jsContent.indexOf(marker);
+  if (idx === -1) return {};
+  const endMarker = '/* /@framecraft-attr-map */';
+  const endIdx = jsContent.indexOf(endMarker, idx);
+  if (endIdx === -1) return {};
+  const jsonText = jsContent.slice(idx + marker.length, endIdx).trim();
+  try {
+    const parsed = JSON.parse(jsonText);
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, Record<string, string | null>>)
+      : {};
+  } catch {
+    return {};
+  }
+}
 
-function applyFramecraftTextOverrides() {
+function serializeRuntimeOverrideScript(
+  textMap: Record<string, string>,
+  attrMap: Record<string, Record<string, string | null>>
+): string {
+  const cleanTextJson = JSON.stringify(textMap, null, 2);
+  const cleanAttrJson = JSON.stringify(attrMap, null, 2);
+  return `/* Framecraft Visual Text & Attribute Overrides */
+const FRAMECRAFT_TEXT_OVERRIDES = /* @framecraft-text-map */ ${cleanTextJson} /* /@framecraft-text-map */;
+const FRAMECRAFT_ATTR_OVERRIDES = /* @framecraft-attr-map */ ${cleanAttrJson} /* /@framecraft-attr-map */;
+
+function applyFramecraftOverrides() {
   for (const [selector, text] of Object.entries(FRAMECRAFT_TEXT_OVERRIDES)) {
     try {
       const el = document.querySelector(selector);
@@ -240,11 +263,30 @@ function applyFramecraftTextOverrides() {
       }
     } catch {}
   }
+  for (const [selector, attrs] of Object.entries(FRAMECRAFT_ATTR_OVERRIDES)) {
+    try {
+      const el = document.querySelector(selector);
+      if (!el || !attrs) continue;
+      for (const [key, rawVal] of Object.entries(attrs)) {
+        if (rawVal === null || rawVal === '') {
+          if (el.hasAttribute(key)) el.removeAttribute(key);
+        } else {
+          const resolvedVal =
+            key === 'src' && typeof window.__resolveProjectAsset__ === 'function'
+              ? window.__resolveProjectAsset__(rawVal) || rawVal
+              : rawVal;
+          if (el.getAttribute(key) !== resolvedVal) {
+            el.setAttribute(key, resolvedVal);
+          }
+        }
+      }
+    } catch {}
+  }
 }
 
 if (typeof document !== 'undefined') {
-  applyFramecraftTextOverrides();
-  const observer = new MutationObserver(applyFramecraftTextOverrides);
+  applyFramecraftOverrides();
+  const observer = new MutationObserver(applyFramecraftOverrides);
   observer.observe(document.documentElement, { childList: true, subtree: true });
 }
 `;
@@ -274,11 +316,12 @@ export function applyRuntimeTextPatchToFiles(
   if (!options.selector.trim()) return files;
   const jsPath = getPreferredOverrideJsPath(files);
   const existing = files.find((f) => f.path === jsPath);
-  const map = parseRuntimeTextMap(existing?.content ?? '');
-  map[options.selector] = options.nextText;
-  const nextJsContent = serializeRuntimeTextScript(map);
+  const textMap = parseRuntimeTextMap(existing?.content ?? '');
+  const attrMap = parseRuntimeAttrMap(existing?.content ?? '');
+  textMap[options.selector] = options.nextText;
+  const nextJsContent = serializeRuntimeOverrideScript(textMap, attrMap);
 
-  const nextFiles = files.map((f) =>
+  let nextFiles = files.map((f) =>
     f.path === jsPath ? { ...f, content: nextJsContent } : f
   );
   if (!existing) {
@@ -288,6 +331,40 @@ export function applyRuntimeTextPatchToFiles(
       type: 'js',
       content: nextJsContent,
     });
+    nextFiles = ensureCssImportedInEntry(nextFiles, jsPath);
+    nextFiles.sort((a, b) => a.path.localeCompare(b.path));
+  }
+  return nextFiles;
+}
+
+export function applyRuntimeAttrPatchToFiles(
+  files: ProjectFile[],
+  selector: string,
+  attributes: Record<string, string | null>
+): ProjectFile[] {
+  if (!selector.trim()) return files;
+  const jsPath = getPreferredOverrideJsPath(files);
+  const existing = files.find((f) => f.path === jsPath);
+  const textMap = parseRuntimeTextMap(existing?.content ?? '');
+  const attrMap = parseRuntimeAttrMap(existing?.content ?? '');
+  const current = { ...(attrMap[selector] ?? {}) };
+  for (const [k, v] of Object.entries(attributes)) {
+    current[k] = v;
+  }
+  attrMap[selector] = current;
+  const nextJsContent = serializeRuntimeOverrideScript(textMap, attrMap);
+
+  let nextFiles = files.map((f) =>
+    f.path === jsPath ? { ...f, content: nextJsContent } : f
+  );
+  if (!existing) {
+    nextFiles.push({
+      path: jsPath,
+      name: jsPath.split('/').pop() || jsPath,
+      type: 'js',
+      content: nextJsContent,
+    });
+    nextFiles = ensureCssImportedInEntry(nextFiles, jsPath);
     nextFiles.sort((a, b) => a.path.localeCompare(b.path));
   }
   return nextFiles;

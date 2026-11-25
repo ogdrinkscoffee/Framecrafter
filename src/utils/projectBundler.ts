@@ -1,5 +1,6 @@
 import type { ProjectFile, ProjectFileType } from '../types/editor';
-import { tagHtmlWithVeIds } from './htmlSync';
+import { buildGoogleFontsHref, collectUsedGoogleFonts } from './fontLibrary.ts';
+import { tagHtmlWithVeIds } from './htmlSync.ts';
 
 export const IGNORED_UPLOAD_SEGMENTS = new Set([
   'node_modules',
@@ -129,6 +130,7 @@ export interface BundleErrorDetail {
 export interface CompiledProjectBundle {
   js?: string;
   css?: string;
+  externalCssUrls?: string[];
   replacedScriptSrcs?: string[];
   hasInlineModuleReplacement?: boolean;
   usesTailwind?: boolean;
@@ -348,7 +350,7 @@ function findDetectedSubRootPrefix(paths: string[]): string {
 }
 
 export function normalizeUploadedFiles(
-  rawFiles: Array<{ path: string; name: string; content: string }>
+  rawFiles: Array<{ path: string; name: string; content: string; blobUrl?: string }>
 ): ProjectFile[] {
   if (rawFiles.length === 0) return [];
 
@@ -359,6 +361,7 @@ export function normalizeUploadedFiles(
     path: normalizeRelativePath(f.path || f.name) || normalizeRelativePath(f.name),
     name: f.name,
     content: f.content,
+    blobUrl: f.blobUrl,
   }));
 
   while (working.length > 0) {
@@ -395,6 +398,7 @@ export function normalizeUploadedFiles(
       name: finalName,
       content: f.content,
       type: detectFileType(finalName),
+      ...(f.blobUrl ? { blobUrl: f.blobUrl } : {}),
     });
   }
 
@@ -605,7 +609,201 @@ function escapeHtmlText(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
-function buildVirtualFetchShim(files: ProjectFile[], entryPath: string): string {
+const IMAGE_ASSET_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg|ico)$/i;
+
+export function isImageAssetPath(filePath: string): boolean {
+  const clean = filePath.split('?')[0].split('#')[0];
+  return IMAGE_ASSET_EXT_RE.test(clean);
+}
+
+export function toSvgDataUrl(svgContent: string): string {
+  if (svgContent.startsWith('data:')) return svgContent;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgContent)}`;
+}
+
+export function getSandboxReadableAssetUrl(file: ProjectFile): string | null {
+  if (file.content.startsWith('data:')) {
+    return file.content;
+  }
+  if (/\.svg$/i.test(file.path) && file.content.trim()) {
+    return toSvgDataUrl(file.content);
+  }
+  if (file.blobUrl) {
+    return file.blobUrl;
+  }
+  return null;
+}
+
+export function buildProjectAssetUrlMap(
+  files: ProjectFile[],
+  entryPath: string
+): Record<string, string> {
+  const map: Record<string, string> = {};
+  const entryDir = getDirname(normalizeRelativePath(entryPath));
+  const basenameCounts = new Map<string, number>();
+
+  for (const file of files) {
+    if (!isImageAssetPath(file.path) && !file.content.startsWith('data:')) continue;
+    const base = (file.path.split('/').pop() || file.path).toLowerCase();
+    basenameCounts.set(base, (basenameCounts.get(base) || 0) + 1);
+  }
+
+  for (const file of files) {
+    if (!isImageAssetPath(file.path) && !file.content.startsWith('data:')) continue;
+    const url = getSandboxReadableAssetUrl(file);
+    if (!url) continue;
+
+    const norm = normalizeRelativePath(file.path);
+    const registerKey = (key: string) => {
+      if (!key) return;
+      map[key] = url;
+      map[key.toLowerCase()] = url;
+    };
+
+    registerKey(norm);
+    registerKey('./' + norm);
+    registerKey('/' + norm);
+
+    if (norm.toLowerCase().startsWith('public/')) {
+      const publicSub = norm.slice('public/'.length);
+      registerKey(publicSub);
+      registerKey('./' + publicSub);
+      registerKey('/' + publicSub);
+    }
+
+    if (entryDir && norm.toLowerCase().startsWith(entryDir.toLowerCase() + '/')) {
+      const rel = norm.slice(entryDir.length + 1);
+      registerKey(rel);
+      registerKey('./' + rel);
+      registerKey('/' + rel);
+    }
+
+    const base = norm.split('/').pop() || norm;
+    if ((basenameCounts.get(base.toLowerCase()) || 0) === 1 && !map[base]) {
+      registerKey(base);
+    }
+  }
+
+  return map;
+}
+
+export function resolveAssetUrlReference(
+  rawRef: string,
+  baseFilePath: string | null,
+  assetMap: Record<string, string>,
+  entryPath: string
+): string | null {
+  if (!rawRef) return null;
+  const trimmed = rawRef.trim();
+  if (
+    !trimmed ||
+    /^(https?:)?\/\//i.test(trimmed) ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('#')
+  ) {
+    return null;
+  }
+
+  const clean = trimmed
+    .split('?')[0]
+    .split('#')[0]
+    .replace(/%PUBLIC_URL%\//g, '/')
+    .replace(/%PUBLIC_URL%/g, '');
+
+  const candidates: string[] = [];
+  const normDirect = normalizeRelativePath(clean);
+
+  if (clean.startsWith('/')) {
+    candidates.push('/' + normDirect, normDirect, `public/${normDirect}`);
+  } else {
+    if (baseFilePath) {
+      const baseDir = getDirname(normalizeRelativePath(baseFilePath));
+      const rel = normalizeRelativePath((baseDir ? `${baseDir}/` : '') + clean);
+      candidates.push(rel, '/' + rel, './' + rel);
+    }
+    const entryDir = getDirname(normalizeRelativePath(entryPath));
+    if (entryDir) {
+      const entryRel = normalizeRelativePath(`${entryDir}/${clean}`);
+      candidates.push(entryRel, '/' + entryRel);
+    }
+    candidates.push(normDirect, '/' + normDirect, `public/${normDirect}`);
+  }
+
+  const baseName = clean.split('/').pop() || '';
+  if (baseName) candidates.push(baseName);
+
+  for (const c of candidates) {
+    if (assetMap[c]) return assetMap[c];
+    if (assetMap[c.toLowerCase()]) return assetMap[c.toLowerCase()];
+  }
+  return null;
+}
+
+export function rewriteCssAssetUrls(
+  cssText: string,
+  cssFilePath: string | null,
+  assetMap: Record<string, string>,
+  entryPath: string
+): string {
+  if (!cssText || Object.keys(assetMap).length === 0) return cssText;
+  return cssText.replace(
+    /url\(\s*(['"]?)([^)'"]+)\1\s*\)/gi,
+    (full, _quote: string, rawUrl: string) => {
+      const resolved = resolveAssetUrlReference(rawUrl, cssFilePath, assetMap, entryPath);
+      if (!resolved) return full;
+      return `url(${JSON.stringify(resolved)})`;
+    }
+  );
+}
+
+export function rewriteHtmlAssetRefs(
+  html: string,
+  entryPath: string,
+  assetMap: Record<string, string>
+): string {
+  if (!html || Object.keys(assetMap).length === 0) return html;
+
+  let next = html.replace(
+    /(<(?:img|source|video|audio)\b[^>]*?\s(?:src|poster)=)(["'])([^"']+)(\2[^>]*?>)/gi,
+    (full, prefix: string, quote: string, rawSrc: string, suffix: string) => {
+      const resolved = resolveAssetUrlReference(rawSrc, entryPath, assetMap, entryPath);
+      if (!resolved) return full;
+      const safeRaw = rawSrc.replace(/"/g, '&quot;');
+      return `${prefix}${quote}${resolved}${quote} data-ve-raw-src="${safeRaw}"${suffix.slice(1)}`;
+    }
+  );
+
+  next = next.replace(
+    /(<link\b[^>]*?\bhref=["'])([^"']+)(["'][^>]*?>)/gi,
+    (full, prefix: string, rawHref: string, suffix: string) => {
+      if (!/rel=["'][^"']*(?:icon|apple-touch-icon)/i.test(full)) return full;
+      const resolved = resolveAssetUrlReference(rawHref, entryPath, assetMap, entryPath);
+      if (!resolved) return full;
+      return `${prefix}${resolved}${suffix}`;
+    }
+  );
+
+  next = next.replace(
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
+    (_full, open: string, cssBody: string, close: string) =>
+      `${open}${rewriteCssAssetUrls(cssBody, entryPath, assetMap, entryPath)}${close}`
+  );
+
+  next = next.replace(
+    /(\sstyle=["'])([^"']*url\([^"']*)(["'])/gi,
+    (_full, pre: string, styleBody: string, post: string) =>
+      `${pre}${rewriteCssAssetUrls(styleBody, entryPath, assetMap, entryPath)}${post}`
+  );
+
+  return next;
+}
+
+function buildVirtualFetchShim(
+  files: ProjectFile[],
+  entryPath: string,
+  assetMap: Record<string, string>
+): string {
   const fileMap: Record<string, string> = {};
   for (const file of files) {
     if (isNonRuntimeBundleFile(file.path) && file.path.toLowerCase() !== 'package.json') continue;
@@ -614,31 +812,163 @@ function buildVirtualFetchShim(files: ProjectFile[], entryPath: string): string 
     fileMap['/' + file.path] = file.content;
   }
   const serializedMap = escapeJsonForScriptTag(JSON.stringify(fileMap));
+  const serializedAssets = escapeJsonForScriptTag(JSON.stringify(assetMap));
   const serializedEntry = escapeJsonForScriptTag(JSON.stringify(entryPath));
 
   return `<script data-ve-internal="virtual-fetch">
 (function() {
   var __VE_FILES__ = ${serializedMap};
   var __VE_ENTRY__ = ${serializedEntry};
+  window.__PROJECT_ASSETS__ = ${serializedAssets};
   var origFetch = window.fetch ? window.fetch.bind(window) : null;
+
+  if (window.location && window.location.protocol === 'about:' && window.history) {
+    try {
+      var origPush = window.history.pushState;
+      var origReplace = window.history.replaceState;
+      if (typeof origPush === 'function') {
+        window.history.pushState = function() {
+          try { return origPush.apply(this, arguments); } catch (e) {}
+        };
+      }
+      if (typeof origReplace === 'function') {
+        window.history.replaceState = function() {
+          try { return origReplace.apply(this, arguments); } catch (e) {}
+        };
+      }
+    } catch (e) {}
+  }
+
+  function resolveAssetUrl(rawUrl) {
+    if (typeof rawUrl !== 'string') return null;
+    var trimmed = rawUrl.trim();
+    if (!trimmed || /^(https?:)?\\/\\//i.test(trimmed) || trimmed.indexOf('data:') === 0 || trimmed.indexOf('blob:') === 0 || trimmed.charAt(0) === '#') {
+      return null;
+    }
+    var clean = trimmed.split('?')[0].split('#')[0].replace(/%PUBLIC_URL%\\//g, '/').replace(/%PUBLIC_URL%/g, '');
+    var stripped = clean.replace(/^\\.\\//, '').replace(/^\\/+/, '');
+    var assets = window.__PROJECT_ASSETS__ || {};
+    var candidates = [clean, '/' + stripped, './' + stripped, stripped, 'public/' + stripped];
+    var dir = __VE_ENTRY__.indexOf('/') !== -1 ? __VE_ENTRY__.slice(0, __VE_ENTRY__.lastIndexOf('/') + 1) : '';
+    if (dir) candidates.push(dir + stripped);
+    var base = stripped.split('/').pop();
+    if (base) candidates.push(base);
+    for (var i = 0; i < candidates.length; i++) {
+      var k = candidates[i];
+      if (assets[k]) return assets[k];
+      if (assets[k.toLowerCase()]) return assets[k.toLowerCase()];
+    }
+    return null;
+  }
+  window.__resolveProjectAsset__ = resolveAssetUrl;
+
   function resolveRef(url) {
     if (typeof url !== 'string') return null;
     if (/^https?:\\/\\//i.test(url) || url.startsWith('data:') || url.startsWith('blob:')) return null;
     var clean = url.split('?')[0].split('#')[0].replace(/^\\.\\//, '').replace(/^\\/+/, '');
     if (__VE_FILES__[clean] !== undefined) return __VE_FILES__[clean];
+    if (__VE_FILES__['public/' + clean] !== undefined) return __VE_FILES__['public/' + clean];
     var dir = __VE_ENTRY__.indexOf('/') !== -1 ? __VE_ENTRY__.slice(0, __VE_ENTRY__.lastIndexOf('/') + 1) : '';
     var combined = (dir + clean).replace(/^\\.\\//, '');
     return __VE_FILES__[combined] !== undefined ? __VE_FILES__[combined] : null;
   }
+
+  function decodeDataUrlToBlob(dataUrl) {
+    try {
+      var parts = dataUrl.split(',');
+      var meta = parts[0] || '';
+      var mimeMatch = /data:([^;]+)/.exec(meta);
+      var mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+      if (meta.indexOf(';base64') !== -1) {
+        var bin = atob(parts[1] || '');
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return new Blob([bytes], { type: mime });
+      }
+      return new Blob([decodeURIComponent(parts[1] || '')], { type: mime });
+    } catch (e) {
+      return null;
+    }
+  }
+
   window.fetch = function(input, init) {
     var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+    var assetData = resolveAssetUrl(url);
+    if (assetData && assetData.indexOf('data:') === 0) {
+      var blob = decodeDataUrlToBlob(assetData);
+      if (blob) {
+        return Promise.resolve(new Response(blob, { status: 200 }));
+      }
+    }
     var content = resolveRef(url);
     if (content !== null) {
-      var mime = url.endsWith('.json') ? 'application/json' : 'text/plain';
+      var mime = url.endsWith('.json') ? 'application/json' : (url.endsWith('.svg') ? 'image/svg+xml' : 'text/plain');
       return Promise.resolve(new Response(content, { status: 200, headers: { 'Content-Type': mime } }));
     }
     return origFetch ? origFetch(input, init) : Promise.reject(new Error('Network unavailable in sandbox'));
   };
+
+  function rewriteNodeAssets(node) {
+    if (!node || node.nodeType !== 1) return;
+    var tag = node.tagName ? node.tagName.toLowerCase() : '';
+    if (tag === 'img' || tag === 'source') {
+      var rawSrc = node.getAttribute('src');
+      if (rawSrc) {
+        var resolved = resolveAssetUrl(rawSrc);
+        if (resolved && resolved !== rawSrc) {
+          if (!node.getAttribute('data-ve-raw-src')) {
+            node.setAttribute('data-ve-raw-src', rawSrc);
+          }
+          node.setAttribute('src', resolved);
+        }
+      }
+    }
+    var inlineStyle = node.getAttribute && node.getAttribute('style');
+    if (inlineStyle && inlineStyle.indexOf('url(') !== -1) {
+      var nextStyle = inlineStyle.replace(/url\\(\\s*(['"]?)([^)'"]+)\\1\\s*\\)/gi, function(full, _q, raw) {
+        var resolved = resolveAssetUrl(raw);
+        return resolved ? ('url("' + resolved + '")') : full;
+      });
+      if (nextStyle !== inlineStyle) {
+        node.setAttribute('style', nextStyle);
+      }
+    }
+  }
+
+  function scanSubtreeAssets(root) {
+    if (!root) return;
+    if (root.nodeType === 1) rewriteNodeAssets(root);
+    if (root.querySelectorAll) {
+      var targets = root.querySelectorAll('img[src], source[src], [style*="url("]');
+      for (var i = 0; i < targets.length; i++) {
+        rewriteNodeAssets(targets[i]);
+      }
+    }
+  }
+
+  if (typeof MutationObserver !== 'undefined') {
+    var obs = new MutationObserver(function(mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var m = mutations[i];
+        if (m.type === 'attributes') {
+          rewriteNodeAssets(m.target);
+        } else if (m.addedNodes) {
+          for (var j = 0; j < m.addedNodes.length; j++) {
+            scanSubtreeAssets(m.addedNodes[j]);
+          }
+        }
+      }
+    });
+    document.addEventListener('DOMContentLoaded', function() {
+      scanSubtreeAssets(document.body || document.documentElement);
+    });
+    obs.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src', 'style']
+    });
+  }
 })();
 </script>`;
 }
@@ -679,6 +1009,14 @@ function buildRuntimeErrorGuard(): string {
 </script>`;
 }
 
+function escapeHtmlAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function buildBlobModuleLoaderMarkup(compiledJs: string): string {
   const safeJson = escapeJsonForScriptTag(JSON.stringify({ js: compiledJs }));
   return `<script type="application/json" id="__ve_bundle_payload__" data-ve-internal="bundle-payload">${safeJson}</script>
@@ -686,9 +1024,124 @@ function buildBlobModuleLoaderMarkup(compiledJs: string): string {
 (function() {
   var payloadEl = document.getElementById('__ve_bundle_payload__');
   if (!payloadEl) return;
+  var payload;
   try {
-    var payload = JSON.parse(payloadEl.textContent || '{}');
-    if (!payload.js) return;
+    payload = JSON.parse(payloadEl.textContent || '{}');
+  } catch (err) {
+    window.dispatchEvent(new ErrorEvent('error', { message: err && err.message ? err.message : String(err) }));
+    return;
+  }
+  if (!payload || !payload.js) return;
+
+  function collectImportedSpecs(code) {
+    var specs = [];
+    var seen = Object.create(null);
+    var re = /(?:^|[;\\n])\\s*(?:import|export)\\s+(?:[\\s\\S]*?\\s+from\\s+)?['"]([^'"]+)['"]/g;
+    var m;
+    while ((m = re.exec(code)) !== null) {
+      if (m[1] && !seen[m[1]]) {
+        seen[m[1]] = true;
+        specs.push(m[1]);
+      }
+    }
+    return specs;
+  }
+
+  function diagnoseFailureAndReport(jsCode) {
+    var mapEl = document.querySelector('script[type="importmap"]');
+    var importMap = {};
+    if (mapEl && mapEl.textContent) {
+      try {
+        var parsedMap = JSON.parse(mapEl.textContent);
+        if (parsedMap && parsedMap.imports) importMap = parsedMap.imports;
+      } catch (e) {}
+    }
+
+    var specs = collectImportedSpecs(jsCode);
+    var externalProbes = [];
+    var unmapped = [];
+    for (var i = 0; i < specs.length; i++) {
+      var spec = specs[i];
+      if (/^https?:\\/\\//i.test(spec)) {
+        externalProbes.push({ spec: spec, url: spec });
+      } else if (importMap[spec]) {
+        externalProbes.push({ spec: spec, url: importMap[spec] });
+      } else if (spec.charAt(0) !== '.' && spec.charAt(0) !== '/' && spec.indexOf('blob:') !== 0 && spec.indexOf('data:') !== 0) {
+        var matchedPrefix = false;
+        var keys = Object.keys(importMap);
+        for (var k = 0; k < keys.length; k++) {
+          var key = keys[k];
+          if (key.charAt(key.length - 1) === '/' && spec.indexOf(key) === 0) {
+            externalProbes.push({ spec: spec, url: importMap[key] + spec.slice(key.length) });
+            matchedPrefix = true;
+            break;
+          }
+        }
+        if (!matchedPrefix) unmapped.push(spec);
+      }
+    }
+
+    if (unmapped.length > 0) {
+      window.dispatchEvent(new ErrorEvent('error', {
+        message: 'Failed to resolve external module import(s): ' + unmapped.join(', ')
+      }));
+      return;
+    }
+
+    var nativeFetch = window.fetch ? window.fetch.bind(window) : null;
+    if (!nativeFetch || externalProbes.length === 0) {
+      var inlineEl = document.createElement('script');
+      inlineEl.type = 'module';
+      inlineEl.setAttribute('data-ve-bundled', 'true');
+      inlineEl.setAttribute('data-ve-fallback', 'inline');
+      inlineEl.textContent = jsCode;
+      inlineEl.onerror = function() {
+        window.dispatchEvent(new ErrorEvent('error', {
+          message: 'Failed to execute bundled Blob module script (and inline module fallback failed)'
+        }));
+      };
+      document.body.appendChild(inlineEl);
+      return;
+    }
+
+    Promise.all(externalProbes.slice(0, 12).map(function(item) {
+      return nativeFetch(item.url, { mode: 'cors' })
+        .then(function(res) {
+          var ct = (res.headers.get('content-type') || '').toLowerCase();
+          if (!res.ok) {
+            return item.spec + ' -> HTTP ' + res.status + ' (' + item.url + ')';
+          }
+          if (ct && ct.indexOf('javascript') === -1 && ct.indexOf('ecmascript') === -1) {
+            return item.spec + ' -> invalid MIME "' + ct + '" (' + item.url + ')';
+          }
+          return null;
+        })
+        .catch(function(err) {
+          return item.spec + ' -> ' + (err && err.message ? err.message : 'network/CORS error') + ' (' + item.url + ')';
+        });
+    })).then(function(results) {
+      var problems = results.filter(Boolean);
+      if (problems.length > 0) {
+        window.dispatchEvent(new ErrorEvent('error', {
+          message: 'Failed to load external module(s):\\n' + problems.join('\\n')
+        }));
+        return;
+      }
+      var inlineEl = document.createElement('script');
+      inlineEl.type = 'module';
+      inlineEl.setAttribute('data-ve-bundled', 'true');
+      inlineEl.setAttribute('data-ve-fallback', 'inline');
+      inlineEl.textContent = jsCode;
+      inlineEl.onerror = function() {
+        window.dispatchEvent(new ErrorEvent('error', {
+          message: 'Failed to execute bundled Blob module script (check browser console for transitive dependency error)'
+        }));
+      };
+      document.body.appendChild(inlineEl);
+    });
+  }
+
+  try {
     var blob = new Blob([payload.js], { type: 'text/javascript' });
     var blobUrl = URL.createObjectURL(blob);
     var scriptEl = document.createElement('script');
@@ -696,7 +1149,7 @@ function buildBlobModuleLoaderMarkup(compiledJs: string): string {
     scriptEl.setAttribute('data-ve-bundled', 'true');
     scriptEl.src = blobUrl;
     scriptEl.onerror = function() {
-      window.dispatchEvent(new ErrorEvent('error', { message: 'Failed to execute bundled Blob module script' }));
+      diagnoseFailureAndReport(payload.js);
     };
     document.body.appendChild(scriptEl);
   } catch (err) {
@@ -739,7 +1192,10 @@ export function buildSrcDoc(
     fileLookup.set(file.path, file);
   }
 
+  const assetMap = buildProjectAssetUrlMap(files, entryPath);
+
   let html = tagHtmlWithVeIds(entryFile.content).replace(/%PUBLIC_URL%\//g, '/').replace(/%PUBLIC_URL%/g, '');
+  html = rewriteHtmlAssetRefs(html, entryPath, assetMap);
 
   const stripTailwindDirectives = (cssText: string): string =>
     cssText
@@ -760,13 +1216,42 @@ export function buildSrcDoc(
       const resolved = resolveRelativeToEntry(entryPath, href);
       const cssFile = fileLookup.get(resolved) ?? fileLookup.get(normalizeRelativePath(href));
       if (!cssFile) return fullMatch;
-      const cssContent = compiledBundle?.usesTailwind
+      const rawCssContent = compiledBundle?.usesTailwind
         ? stripTailwindDirectives(cssFile.content)
         : cssFile.content;
+      const cssContent = rewriteCssAssetUrls(rawCssContent, cssFile.path, assetMap, entryPath);
       const safeCss = cssContent.replace(/<\/style>/gi, '<\\/style>');
       return `<style data-ve-source="${cssFile.path}">\n${safeCss}\n</style>`;
     }
   );
+
+  // Strip any existing Content-Security-Policy meta tags that would block blob: or esm.sh in sandbox
+  html = html.replace(/<meta\b[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
+
+  // Extract and merge any existing <script type="importmap"> from source HTML so only one importmap sits at top of <head>
+  const mergedImports: Record<string, string> = {};
+  html = html.replace(
+    /<script\b([^>]*\btype=["']importmap["'][^>]*)>([\s\S]*?)<\/script>/gi,
+    (_full, _attrs: string, body: string) => {
+      try {
+        const parsed = JSON.parse(body) as { imports?: Record<string, unknown> };
+        if (parsed && parsed.imports && typeof parsed.imports === 'object') {
+          for (const [k, v] of Object.entries(parsed.imports)) {
+            if (typeof v === 'string') mergedImports[k] = v;
+          }
+        }
+      } catch {
+        // Ignore malformed source importmap
+      }
+      return '';
+    }
+  );
+
+  if (compiledBundle?.importMap) {
+    for (const [k, v] of Object.entries(compiledBundle.importMap)) {
+      mergedImports[k] = v;
+    }
+  }
 
   // Handle script tags cleanly: remove bundled entry scripts (they run safely via Blob URL below),
   // and embed unbundled classic local scripts safely.
@@ -828,22 +1313,34 @@ export function buildSrcDoc(
 
   // Build <head> injections with <script type="importmap"> FIRST before any module script
   const headInjections: string[] = [];
-  if (compiledBundle?.importMap && Object.keys(compiledBundle.importMap).length > 0) {
-    const mapJson = escapeJsonForScriptTag(JSON.stringify({ imports: compiledBundle.importMap }));
+  if (Object.keys(mergedImports).length > 0) {
+    const mapJson = escapeJsonForScriptTag(JSON.stringify({ imports: mergedImports }));
     headInjections.push(`<script type="importmap" data-ve-internal="importmap">${mapJson}</script>`);
   }
 
-  headInjections.push(buildVirtualFetchShim(files, entryPath));
+  headInjections.push(buildVirtualFetchShim(files, entryPath, assetMap));
   headInjections.push(buildRuntimeErrorGuard());
 
   if (compiledBundle?.usesTailwind && !/cdn\.tailwindcss\.com/i.test(html)) {
     headInjections.push(`<script src="https://cdn.tailwindcss.com" data-ve-internal="tailwind-cdn"></script>`);
   }
 
+  if (compiledBundle?.externalCssUrls && compiledBundle.externalCssUrls.length > 0) {
+    const seenCss = new Set<string>();
+    for (const cssUrl of compiledBundle.externalCssUrls) {
+      if (!cssUrl || seenCss.has(cssUrl)) continue;
+      seenCss.add(cssUrl);
+      headInjections.push(
+        `<link rel="stylesheet" href="${escapeHtmlAttr(cssUrl)}" data-ve-internal="external-css" />`
+      );
+    }
+  }
+
   if (compiledBundle?.css) {
-    const cleanedCss = compiledBundle.usesTailwind
+    const strippedCss = compiledBundle.usesTailwind
       ? stripTailwindDirectives(compiledBundle.css)
       : compiledBundle.css;
+    const cleanedCss = rewriteCssAssetUrls(strippedCss, entryPath, assetMap, entryPath);
     if (cleanedCss.trim()) {
       const safeCss = cleanedCss.replace(/<\/style>/gi, '<\\/style>');
       headInjections.push(`<style data-ve-bundled="true">\n${safeCss}\n</style>`);
@@ -857,6 +1354,18 @@ export function buildSrcDoc(
     const safeOverrideCss = visualOverrideCss.content.replace(/<\/style>/gi, '<\\/style>');
     headInjections.push(
       `<style data-ve-internal="visual-overrides" data-ve-source="${visualOverrideCss.path}">\n${safeOverrideCss}\n</style>`
+    );
+  }
+
+  const usedGoogleFamilies = collectUsedGoogleFonts(
+    files
+      .filter((f) => f.type === 'html' || f.type === 'css' || f.type === 'js')
+      .map((f) => f.content)
+  );
+  const autoFontsHref = buildGoogleFontsHref(usedGoogleFamilies);
+  if (autoFontsHref && !html.includes(autoFontsHref)) {
+    headInjections.push(
+      `<link rel="stylesheet" href="${autoFontsHref}" data-ve-internal="auto-fonts" />`
     );
   }
 
@@ -917,3 +1426,55 @@ export function buildSrcDoc(
 
   return html;
 }
+
+export interface HotPatchPayload {
+  bodyHtml: string;
+  cssSources: Record<string, string>;
+  overrideCss: string;
+  googleFontHref: string | null;
+}
+
+export function extractHotPatchPayload(
+  files: ProjectFile[],
+  entryPath: string
+): HotPatchPayload | null {
+  const entryFile = files.find((f) => f.path === entryPath);
+  if (!entryFile) return null;
+
+  const assetMap = buildProjectAssetUrlMap(files, entryPath);
+  let html = tagHtmlWithVeIds(entryFile.content)
+    .replace(/%PUBLIC_URL%\//g, '/')
+    .replace(/%PUBLIC_URL%/g, '');
+  html = rewriteHtmlAssetRefs(html, entryPath, assetMap);
+
+  // Strip local/inline <script> tags so hot-patching body DOM doesn't duplicate script execution
+  html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+
+  const bodyMatch = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
+  const bodyHtml = bodyMatch ? bodyMatch[1] : html;
+
+  const cssSources: Record<string, string> = {};
+  for (const f of files) {
+    if (f.type === 'css') {
+      cssSources[f.path] = rewriteCssAssetUrls(f.content, f.path, assetMap, entryPath);
+    }
+  }
+
+  const overrideCssFile =
+    files.find((f) => f.path === 'src/framecraft-edits.css') ??
+    files.find((f) => f.path === 'framecraft-edits.css');
+
+  const usedFamilies = collectUsedGoogleFonts(
+    files
+      .filter((f) => f.type === 'html' || f.type === 'css' || f.type === 'js')
+      .map((f) => f.content)
+  );
+
+  return {
+    bodyHtml,
+    cssSources,
+    overrideCss: overrideCssFile?.content ?? '',
+    googleFontHref: buildGoogleFontsHref(usedFamilies),
+  };
+}
+

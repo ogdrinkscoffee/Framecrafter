@@ -3,10 +3,116 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
-  :root {
+  :root,
+  html[data-studio-theme="daylight"] {
     --font-display: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
     --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+    /* Consistent studio spacing & sizing scale */
+    --studio-toolbar-h: 48px;
+    --studio-subbar-h: 36px;
+    --studio-control-h: 28px;
+    --studio-ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+    --studio-bg: #f1f5f9;
+    --studio-surface: #ffffff;
+    --studio-elevated: #f8fafc;
+    --studio-input: #f1f5f9;
+    --studio-hover: #e2e8f0;
+    --studio-border: rgba(15, 23, 42, 0.11);
+    --studio-border-subtle: rgba(15, 23, 42, 0.07);
+    --studio-border-strong: rgba(15, 23, 42, 0.2);
+    --studio-text: #1e293b;
+    --studio-text-strong: #0f172a;
+    --studio-text-secondary: #334155;
+    --studio-muted: #475569;
+    --studio-muted-soft: #64748b;
+    --studio-grid-bg: #e9eef5;
+    --studio-grid-dot: rgba(15, 23, 42, 0.11);
+    --studio-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    --studio-scroll-thumb: rgba(15, 23, 42, 0.18);
+    --studio-scroll-thumb-hover: rgba(15, 23, 42, 0.32);
+    --studio-shadow: 0 20px 50px rgba(15, 23, 42, 0.14);
+    --studio-modal-backdrop: rgba(15, 23, 42, 0.45);
+    --studio-checker-a: #f8fafc;
+    --studio-checker-b: #e2e8f0;
+  }
+
+  html[data-studio-theme="paper"] {
+    --studio-bg: #f5f2eb;
+    --studio-surface: #fdfcf9;
+    --studio-elevated: #f7f4ed;
+    --studio-input: #f1ede3;
+    --studio-hover: #eae4d7;
+    --studio-border: rgba(41, 37, 36, 0.11);
+    --studio-border-subtle: rgba(41, 37, 36, 0.07);
+    --studio-border-strong: rgba(41, 37, 36, 0.22);
+    --studio-text: #292524;
+    --studio-text-strong: #1c1917;
+    --studio-text-secondary: #44403c;
+    --studio-muted: #57534e;
+    --studio-muted-soft: #78716c;
+    --studio-grid-bg: #ede8dc;
+    --studio-grid-dot: rgba(41, 37, 36, 0.12);
+    --studio-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+    --studio-scroll-thumb: rgba(41, 37, 36, 0.18);
+    --studio-scroll-thumb-hover: rgba(41, 37, 36, 0.34);
+    --studio-shadow: 0 20px 50px rgba(28, 25, 23, 0.12);
+    --studio-modal-backdrop: rgba(28, 25, 23, 0.42);
+    --studio-checker-a: #fdfcf9;
+    --studio-checker-b: #e7e1d3;
+  }
+
+  html.dark,
+  html[data-studio-theme="obsidian"] {
+    --studio-bg: #09090b;
+    --studio-surface: #111114;
+    --studio-elevated: #18181b;
+    --studio-input: #141418;
+    --studio-hover: #27272a;
+    --studio-border: rgba(255, 255, 255, 0.08);
+    --studio-border-subtle: rgba(255, 255, 255, 0.05);
+    --studio-border-strong: rgba(255, 255, 255, 0.16);
+    --studio-text: #e4e4e7;
+    --studio-text-strong: #fafafa;
+    --studio-text-secondary: #d4d4d8;
+    --studio-muted: #a1a1aa;
+    --studio-muted-soft: #71717a;
+    --studio-grid-bg: #09090b;
+    --studio-grid-dot: rgba(255, 255, 255, 0.07);
+    --studio-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --studio-scroll-thumb: rgba(255, 255, 255, 0.14);
+    --studio-scroll-thumb-hover: rgba(255, 255, 255, 0.26);
+    --studio-shadow: 0 20px 50px rgba(0, 0, 0, 0.65);
+    --studio-modal-backdrop: rgba(9, 9, 11, 0.78);
+    --studio-checker-a: #18181b;
+    --studio-checker-b: #27272a;
+  }
+
+  html[data-studio-theme="slate"].dark {
+    --studio-bg: #0b1120;
+    --studio-surface: #0f172a;
+    --studio-elevated: #1e293b;
+    --studio-input: #162033;
+    --studio-hover: #334155;
+    --studio-border: rgba(148, 163, 184, 0.16);
+    --studio-border-subtle: rgba(148, 163, 184, 0.1);
+    --studio-border-strong: rgba(148, 163, 184, 0.28);
+    --studio-text: #e2e8f0;
+    --studio-text-strong: #f8fafc;
+    --studio-text-secondary: #cbd5e1;
+    --studio-muted: #94a3b8;
+    --studio-muted-soft: #64748b;
+    --studio-grid-bg: #0b1120;
+    --studio-grid-dot: rgba(148, 163, 184, 0.14);
+    --studio-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    --studio-scroll-thumb: rgba(148, 163, 184, 0.22);
+    --studio-scroll-thumb-hover: rgba(148, 163, 184, 0.36);
+    --studio-shadow: 0 20px 50px rgba(2, 6, 23, 0.7);
+    --studio-modal-backdrop: rgba(2, 6, 23, 0.76);
+    --studio-checker-a: #0f172a;
+    --studio-checker-b: #1e293b;
   }
 
   html,
@@ -15,8 +121,17 @@
     height: 100%;
     overflow: hidden;
     font-family: var(--font-sans);
-    background-color: #09090b;
-    color: #e4e4e7;
+    background-color: var(--studio-bg);
+    color: var(--studio-text);
+  }
+
+  html.dark body {
+    letter-spacing: 0.005em;
+  }
+
+  select option {
+    background-color: var(--studio-surface);
+    color: var(--studio-text-strong);
   }
 }
 
@@ -30,22 +145,83 @@
 }
 
 .studio-section-header {
-  font-size: 11px;
-  line-height: 1.25;
+  font-size: 10.5px;
+  line-height: 1.2;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: #a1a1aa;
+  letter-spacing: 0.08em;
+  color: var(--studio-muted);
 }
 
 .studio-card-highlight {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  box-shadow: var(--studio-card-shadow);
 }
 
-/* Custom thin dark scrollbars across all studio panels */
+/* Tactile matte SVG grain overlay (2.4% opacity, non-interactive) */
+.studio-grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+  opacity: 0.024;
+}
+
+/* Subtle transparency checkerboard for asset thumbnails */
+.studio-checkerboard {
+  background-color: var(--studio-checker-a);
+  background-image:
+    linear-gradient(45deg, var(--studio-checker-b) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--studio-checker-b) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--studio-checker-b) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--studio-checker-b) 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+}
+
+/* Choreographed icon-only reveal pill/button transition */
+.studio-reveal-label {
+  display: inline-block;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transform: translateX(-2px);
+  transition:
+    max-width 170ms var(--studio-ease),
+    opacity 150ms var(--studio-ease),
+    transform 170ms var(--studio-ease),
+    margin-left 170ms var(--studio-ease),
+    margin-right 170ms var(--studio-ease);
+}
+
+.group:hover .studio-reveal-label,
+.group:focus-visible .studio-reveal-label,
+.studio-reveal-open .studio-reveal-label {
+  max-width: 148px;
+  opacity: 1;
+  transform: translateX(0);
+  margin-left: 5px;
+}
+
+.group.flex-row-reverse:hover .studio-reveal-label,
+.group.flex-row-reverse:focus-visible .studio-reveal-label {
+  margin-left: 0;
+  margin-right: 5px;
+}
+
+.studio-pressable {
+  transition:
+    background-color 140ms var(--studio-ease),
+    border-color 140ms var(--studio-ease),
+    color 140ms var(--studio-ease),
+    transform 120ms var(--studio-ease);
+}
+
+.studio-pressable:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* Custom thin scrollbars across all studio panels */
 .builder-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  scrollbar-color: var(--studio-scroll-thumb) transparent;
 }
 
 .builder-scroll::-webkit-scrollbar {
@@ -58,17 +234,17 @@
 }
 
 .builder-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--studio-scroll-thumb);
   border-radius: 9999px;
 }
 
 .builder-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.26);
+  background: var(--studio-scroll-thumb-hover);
 }
 
-/* Obsidian dot-grid backdrop for the Live Canvas stage */
+/* Dot-grid backdrop for the Live Canvas stage */
 .canvas-grid-bg {
-  background-color: #09090b;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-color: var(--studio-grid-bg);
+  background-image: radial-gradient(var(--studio-grid-dot) 1px, transparent 1px);
   background-size: 20px 20px;
 }

@@ -1,10 +1,15 @@
 export type ProjectFileType = 'html' | 'css' | 'js' | 'json' | 'other';
 
+export type ThemeMode = 'dark' | 'light';
+
+export type StudioThemeId = 'obsidian' | 'slate' | 'daylight' | 'paper';
+
 export interface ProjectFile {
   path: string;
   name: string;
   content: string;
   type: ProjectFileType;
+  blobUrl?: string;
 }
 
 export type ViewportPreset = 'desktop' | 'tablet' | 'mobile';
@@ -98,6 +103,7 @@ export interface ElementStyleSnapshot {
   display: string;
   flexDirection: string;
   gap: string;
+  objectFit?: string;
 }
 
 export interface SelectedElementInfo {
@@ -112,6 +118,8 @@ export interface SelectedElementInfo {
   className: string;
   href: string;
   target: string;
+  imgSrc?: string;
+  imgAlt?: string;
   onclickAttr: string;
   actionType: string;
   actionValue: string;
@@ -160,6 +168,7 @@ export interface SampleTemplate {
   id: string;
   name: string;
   description: string;
+  category?: 'Web App' | 'Landing' | 'Editorial' | 'Commerce' | 'Starter';
   files: ProjectFile[];
 }
 
