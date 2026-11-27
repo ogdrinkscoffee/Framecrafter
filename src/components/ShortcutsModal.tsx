@@ -98,6 +98,7 @@ const RUNNABLE_ACTIONS = new Set<ShortcutAction>([
   'viewport-desktop',
   'viewport-tablet',
   'viewport-mobile',
+  'viewport-all',
   'zoom-in',
   'zoom-out',
   'zoom-100',

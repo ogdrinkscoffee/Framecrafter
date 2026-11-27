@@ -48,6 +48,7 @@ export type ShortcutAction =
   | 'viewport-desktop'
   | 'viewport-tablet'
   | 'viewport-mobile'
+  | 'viewport-all'
   | 'escape'
   | 'open-shortcuts';
 
@@ -80,6 +81,7 @@ export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
   { action: 'viewport-desktop', keys: ['1'], label: 'Switch to Desktop viewport', category: 'Viewports, Zoom & Panels' },
   { action: 'viewport-tablet', keys: ['2'], label: 'Switch to Tablet viewport', category: 'Viewports, Zoom & Panels' },
   { action: 'viewport-mobile', keys: ['3'], label: 'Switch to Mobile viewport', category: 'Viewports, Zoom & Panels' },
+  { action: 'viewport-all', keys: ['4'], label: 'Switch to All Viewports multi-artboard canvas', category: 'Viewports, Zoom & Panels' },
   { action: 'zoom-in', keys: ['Ctrl / Cmd', '+'], label: 'Zoom in canvas', category: 'Viewports, Zoom & Panels' },
   { action: 'zoom-out', keys: ['Ctrl / Cmd', '-'], label: 'Zoom out canvas', category: 'Viewports, Zoom & Panels' },
   { action: 'zoom-100', keys: ['Ctrl / Cmd', '0'], label: 'Reset canvas zoom to 100%', category: 'Viewports, Zoom & Panels' },
@@ -223,6 +225,7 @@ export function matchShortcutAction(
       if (event.key === '1') return 'viewport-desktop';
       if (event.key === '2') return 'viewport-tablet';
       if (event.key === '3') return 'viewport-mobile';
+      if (event.key === '4') return 'viewport-all';
       if (keyLower === 'v') return 'mode-edit';
       if (keyLower === 'g') return 'toggle-outlines';
     }

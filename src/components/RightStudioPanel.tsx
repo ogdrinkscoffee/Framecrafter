@@ -16,6 +16,7 @@ import { HistoryTimelinePanel } from './HistoryTimelinePanel';
 import { InspectorPanel } from './InspectorPanel';
 import { SeoMetaPanel } from './SeoMetaPanel';
 import type { SvgShapeHtmlPatch } from '../utils/htmlSync';
+import type { AiElementCopilotControls } from './AiElementBar';
 import {
   DuotoneElementsIcon,
   DuotoneInspectorIcon,
@@ -46,6 +47,7 @@ interface RightStudioPanelProps {
   htmlPages: string[];
   primaryCssPath: string | null;
   stylesCssContent: string;
+  overrideCssContent?: string;
   onPreviewStyle: (styles: Record<string, string>) => void;
   onCommitStyle: (styles: Record<string, string | null>, label: string) => void;
   onCommitResponsiveStyle: (
@@ -80,6 +82,7 @@ interface RightStudioPanelProps {
   onUndoHistory: () => void;
   onRedoHistory: () => void;
   onJumpToHistoryIndex: (index: number) => void;
+  aiCopilot: AiElementCopilotControls;
 }
 
 const STUDIO_PANEL_TABS: Array<{
@@ -149,6 +152,7 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
   htmlPages,
   primaryCssPath,
   stylesCssContent,
+  overrideCssContent = '',
   onPreviewStyle,
   onCommitStyle,
   onCommitResponsiveStyle,
@@ -179,6 +183,7 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
   onUndoHistory,
   onRedoHistory,
   onJumpToHistoryIndex,
+  aiCopilot,
 }) => {
   return (
     <aside
@@ -237,6 +242,7 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
           responsiveScope={responsiveScope}
           onChangeResponsiveScope={onChangeResponsiveScope}
           stylesCssContent={stylesCssContent}
+          overrideCssContent={overrideCssContent}
           activeHtmlContent={activeHtmlContent}
           htmlPages={htmlPages}
           onPreviewStyle={onPreviewStyle}
@@ -260,6 +266,7 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
           onToggleVisibility={onToggleVisibility}
           onViewInCode={onViewInCode}
           onHoverSpacing={onHoverSpacing}
+          aiCopilot={aiCopilot}
         />
       )}
 

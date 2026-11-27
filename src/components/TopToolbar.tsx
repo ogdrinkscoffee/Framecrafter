@@ -4,6 +4,7 @@ import {
   Blocks,
   Check,
   ChevronDown,
+  Columns3,
   Command,
   Download,
   FileArchive,
@@ -327,6 +328,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
               { id: 'desktop', label: 'Desktop', key: '1', icon: Laptop },
               { id: 'tablet', label: 'Tablet', key: '2', icon: Tablet },
               { id: 'mobile', label: 'Mobile', key: '3', icon: Smartphone },
+              { id: 'all', label: 'All Viewports', key: '4', icon: Columns3 },
             ] as const
           ).map(({ id, label, key, icon: Icon }) => {
             const active = viewport === id;
@@ -335,10 +337,12 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 key={id}
                 type="button"
                 onClick={() => onChangeViewport(id)}
-                aria-label={`${label} viewport`}
+                aria-label={id === 'all' ? 'All Viewports' : `${label} viewport`}
                 aria-pressed={active}
-                title={`${label} viewport (${key})`}
+                title={id === 'all' ? `All Viewports (${key})` : `${label} viewport (${key})`}
                 className={`group inline-flex items-center h-full px-2 rounded-md text-[11.5px] font-medium studio-pressable whitespace-nowrap shrink-0 cursor-pointer ${
+                  active && id === 'all' ? 'studio-reveal-open' : ''
+                } ${
                   active
                     ? 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs border border-[var(--studio-border)]'
                     : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] border border-transparent'

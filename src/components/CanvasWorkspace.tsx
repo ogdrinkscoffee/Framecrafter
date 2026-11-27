@@ -21,6 +21,7 @@ import {
   CornerLeftUp,
   Diamond,
   Eye,
+  Hand,
   Heart,
   Hexagon,
   Highlighter,
@@ -31,6 +32,7 @@ import {
   Link2,
   List,
   ListOrdered,
+  Maximize2,
   MessageSquare,
   Minus,
   MousePointerClick,
@@ -46,6 +48,7 @@ import {
   SendToBack,
   Shapes,
   SlidersHorizontal,
+  Sparkles,
   Square,
   Star,
   StickyNote,
@@ -58,6 +61,7 @@ import {
   Underline,
 } from 'lucide-react';
 import type {
+  ArtboardId,
   AutoSaveStatus,
   CanvasZoomMode,
   CenterTab,
@@ -73,6 +77,8 @@ import { QUICK_INSERT_ITEMS } from '../utils/codeSync';
 import { DRAGGABLE_COMPONENTS } from '../utils/componentCatalog';
 import { FONT_CATEGORIES, STUDIO_FONT_CATALOG, matchStudioFontOption } from '../utils/fontLibrary';
 import { buildTableHtml, cssColorToHex } from '../utils/htmlSync';
+import { isShortcutTypingTarget } from '../utils/shortcuts';
+import { AiElementBar, type AiElementCopilotControls } from './AiElementBar';
 import { HoverIconButton } from './StudioPrimitives';
 
 interface CanvasWorkspaceProps {
@@ -84,6 +90,10 @@ interface CanvasWorkspaceProps {
   autoSaveStatus: AutoSaveStatus;
   onToggleAutoSave: () => void;
   viewport: ViewportPreset;
+  onChangeViewport?: (viewport: ViewportPreset) => void;
+  activeArtboard: ArtboardId;
+  onSelectArtboard: (artboard: ArtboardId) => void;
+  onRegisterArtboardIframe: (artboard: ArtboardId, el: HTMLIFrameElement | null) => void;
   canvasWidthPx: number | null;
   canvasHeightPx: number | null;
   onResizeCanvasFrame: (widthPx: number | null, heightPx: number | null) => void;
@@ -120,8 +130,9 @@ interface CanvasWorkspaceProps {
   onRemoveSelected: () => void;
   onViewSelectedInCode: () => void;
   onUpdateCodeContent: (path: string, nextContent: string) => void;
-  onPostIframeMessage: (msg: Record<string, unknown>) => void;
+  onPostIframeMessage: (msg: Record<string, unknown>, targetArtboard?: ArtboardId | 'all') => void;
   onDropComponentOnCanvas: (component: DraggableComponentDef) => void;
+  aiCopilot: AiElementCopilotControls;
 }
 
 type ResizeHandleDir = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
@@ -190,6 +201,20 @@ const SHAPE_GALLERY_ITEMS = [
 
 const OFFICE_SYMBOLS = ['©', '®', '™', '§', '°', '±', '×', '÷', '→', '←', '↑', '↓', '★', '✓', '•', '€', '£', '¥'];
 
+const MULTI_ARTBOARD_DEFS: ReadonlyArray<{
+  id: ArtboardId;
+  label: string;
+  widthPx: number;
+  heightPx: number;
+}> = [
+  { id: 'desktop', label: 'DESKTOP', widthPx: 1440, heightPx: 900 },
+  { id: 'tablet', label: 'TABLET', widthPx: 768, heightPx: 900 },
+  { id: 'mobile', label: 'MOBILE', widthPx: 375, heightPx: 812 },
+];
+const MULTI_ARTBOARD_GAP_PX = 48;
+const MULTI_ARTBOARD_TOTAL_W = 1440 + 768 + 375 + MULTI_ARTBOARD_GAP_PX * 2;
+const MULTI_ARTBOARD_TOTAL_H = 928;
+
 type DragSessionState =
   | {
       kind: 'resize';
@@ -232,6 +257,10 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   autoSaveStatus,
   onToggleAutoSave,
   viewport,
+  onChangeViewport,
+  activeArtboard,
+  onSelectArtboard,
+  onRegisterArtboardIframe,
   canvasWidthPx,
   canvasHeightPx,
   onResizeCanvasFrame,
@@ -270,8 +299,10 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   onUpdateCodeContent,
   onPostIframeMessage,
   onDropComponentOnCanvas,
+  aiCopilot,
 }) => {
   const [dragState, setDragState] = useState<DragSessionState | null>(null);
+  const [aiBarOpen, setAiBarOpen] = useState(false);
   const [frameDrag, setFrameDrag] = useState<{
     axis: 'left' | 'right' | 'bottom';
     startX: number;
@@ -303,6 +334,11 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const dragRef = useRef(dragState);
   dragRef.current = dragState;
 
+  const selectedKey = selectedElement ? (selectedElement.veId || selectedElement.runtimeId) : null;
+  useEffect(() => {
+    setAiBarOpen(false);
+  }, [selectedKey]);
+
   const frameDragRef = useRef(frameDrag);
   frameDragRef.current = frameDrag;
 
@@ -315,17 +351,45 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const menuContainerRef = useRef<HTMLDivElement | null>(null);
   const quickAddRef = useRef<HTMLDivElement | null>(null);
   const stageScrollRef = useRef<HTMLDivElement | null>(null);
+  const multiStageRef = useRef<HTMLDivElement | null>(null);
   const frameContainerRef = useRef<HTMLDivElement | null>(null);
   const codeTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const artboardIframesRef = useRef<Record<ArtboardId, HTMLIFrameElement | null>>({
+    desktop: null,
+    tablet: null,
+    mobile: null,
+  });
+
+  const [multiPan, setMultiPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [multiCustomZoom, setMultiCustomZoom] = useState<number | null>(null);
+  const [spacePressed, setSpacePressed] = useState(false);
+  const [panDrag, setPanDrag] = useState<{
+    startX: number;
+    startY: number;
+    startPanX: number;
+    startPanY: number;
+  } | null>(null);
 
   const effectiveFrameWidthPx =
     canvasWidthPx ??
-    (viewport === 'mobile' ? 375 : viewport === 'tablet' ? 768 : Math.min(1200, Math.max(600, stageSize.width - 48)));
+    (viewport === 'mobile' ? 375 : viewport === 'tablet' ? 768 : 1440);
 
   const effectiveFrameHeightPx =
     canvasHeightPx ?? Math.max(480, Math.round(stageSize.height - 44));
 
   const zoomScale = useMemo(() => {
+    if (viewport === 'all') {
+      if (multiCustomZoom !== null) {
+        return multiCustomZoom;
+      }
+      if (canvasZoom === '50') return 0.5;
+      if (canvasZoom === '75') return 0.75;
+      if (canvasZoom === '100') return 1;
+      const availW = Math.max(320, stageSize.width - 72);
+      const availH = Math.max(240, stageSize.height - 104);
+      const fitScale = Math.min(availW / MULTI_ARTBOARD_TOTAL_W, availH / MULTI_ARTBOARD_TOTAL_H);
+      return Math.min(1, Math.max(0.18, Number(fitScale.toFixed(3))));
+    }
     if (canvasZoom === '50') return 0.5;
     if (canvasZoom === '75') return 0.75;
     if (canvasZoom === 'fit') {
@@ -333,13 +397,136 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       return Math.min(1, Math.max(0.35, availW / Math.max(320, effectiveFrameWidthPx)));
     }
     return 1;
-  }, [canvasZoom, stageSize.width, effectiveFrameWidthPx]);
+  }, [viewport, multiCustomZoom, canvasZoom, stageSize.width, stageSize.height, effectiveFrameWidthPx]);
 
   const zoomScaleRef = useRef(zoomScale);
   zoomScaleRef.current = zoomScale;
 
   useEffect(() => {
-    const el = stageScrollRef.current;
+    setMultiCustomZoom(null);
+  }, [canvasZoom]);
+
+  useEffect(() => {
+    if (viewport === 'all') {
+      setMultiPan({ x: 0, y: 0 });
+      setMultiCustomZoom(null);
+    }
+  }, [viewport]);
+
+  useEffect(() => {
+    if (viewport !== 'all' || centerTab !== 'preview') {
+      setSpacePressed(false);
+      setPanDrag(null);
+      return;
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat && !isShortcutTypingTarget(e.target)) {
+        e.preventDefault();
+        setSpacePressed(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpacePressed(false);
+      }
+    };
+    const onBlur = () => {
+      setSpacePressed(false);
+      setPanDrag(null);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [viewport, centerTab]);
+
+  useEffect(() => {
+    if (!panDrag) return;
+    const onPointerMove = (e: PointerEvent) => {
+      const dx = e.clientX - panDrag.startX;
+      const dy = e.clientY - panDrag.startY;
+      setMultiPan({
+        x: Math.round(panDrag.startPanX + dx),
+        y: Math.round(panDrag.startPanY + dy),
+      });
+    };
+    const onPointerUp = () => {
+      setPanDrag(null);
+    };
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+    };
+  }, [panDrag]);
+
+  useEffect(() => {
+    const el = multiStageRef.current;
+    if (!el || viewport !== 'all' || centerTab !== 'preview') return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        const currentScale = zoomScaleRef.current || 1;
+        const factor = Math.exp(-e.deltaY * 0.0022);
+        const nextScale = Math.min(1.5, Math.max(0.18, Number((currentScale * factor).toFixed(3))));
+        setMultiCustomZoom(nextScale);
+        return;
+      }
+      setMultiPan((prev) => ({
+        x: Math.round(prev.x - e.deltaX),
+        y: Math.round(prev.y - e.deltaY),
+      }));
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [viewport, centerTab]);
+
+  useEffect(() => {
+    if (viewport !== 'all') {
+      artboardIframesRef.current = { desktop: null, tablet: null, mobile: null };
+      onRegisterArtboardIframe('desktop', null);
+      onRegisterArtboardIframe('tablet', null);
+      onRegisterArtboardIframe('mobile', null);
+      return;
+    }
+    const activeFrameEl = artboardIframesRef.current[activeArtboard];
+    if (activeFrameEl) {
+      (iframeRef as { current: HTMLIFrameElement | null }).current = activeFrameEl;
+    }
+  }, [viewport, activeArtboard, iframeRef, onRegisterArtboardIframe]);
+
+  useEffect(() => {
+    if (viewport !== 'all') return;
+    const targets = Object.values(artboardIframesRef.current);
+    for (const frameEl of targets) {
+      frameEl?.contentWindow?.postMessage({ target: 've-iframe', type: 'SET_MODE', mode: editorMode }, '*');
+    }
+  }, [viewport, editorMode]);
+
+  useEffect(() => {
+    if (viewport !== 'all') return;
+    const targets = Object.values(artboardIframesRef.current);
+    for (const frameEl of targets) {
+      frameEl?.contentWindow?.postMessage(
+        { target: 've-iframe', type: 'SET_OUTLINES', enabled: showOutlines },
+        '*'
+      );
+    }
+  }, [viewport, showOutlines]);
+
+  useEffect(() => {
+    const el = viewport === 'all' ? multiStageRef.current : stageScrollRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -351,7 +538,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [viewport, centerTab]);
 
   useEffect(() => {
     if (!openMenu && !quickAddOpen) return;
@@ -698,28 +885,41 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     });
   };
 
-  const handleDragOverCanvas = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDragOverCanvas = (
+    e: React.DragEvent<HTMLDivElement>,
+    boardId?: ArtboardId
+  ) => {
     if (!draggingComponent) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
-    const iframeRect = iframeRef.current?.getBoundingClientRect();
+    const targetFrame = boardId ? artboardIframesRef.current[boardId] : iframeRef.current;
+    const iframeRect = targetFrame?.getBoundingClientRect();
     if (!iframeRect) return;
     const scale = zoomScale || 1;
-    onPostIframeMessage({
-      type: 'HIGHLIGHT_DROP_TARGET',
-      x: (e.clientX - iframeRect.left) / scale,
-      y: (e.clientY - iframeRect.top) / scale,
-    });
+    onPostIframeMessage(
+      {
+        type: 'HIGHLIGHT_DROP_TARGET',
+        x: (e.clientX - iframeRect.left) / scale,
+        y: (e.clientY - iframeRect.top) / scale,
+      },
+      boardId
+    );
   };
 
-  const handleDropCanvas = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDropCanvas = (
+    e: React.DragEvent<HTMLDivElement>,
+    boardId?: ArtboardId
+  ) => {
     const droppedId = e.dataTransfer?.getData('text/plain');
     const resolvedComponent =
       draggingComponent ??
       (droppedId ? DRAGGABLE_COMPONENTS.find((c) => c.id === droppedId) ?? null : null);
     if (!resolvedComponent) return;
     e.preventDefault();
-    onPostIframeMessage({ type: 'CLEAR_DROP_TARGET' });
+    if (boardId && boardId !== activeArtboard) {
+      onSelectArtboard(boardId);
+    }
+    onPostIframeMessage({ type: 'CLEAR_DROP_TARGET' }, 'all');
     onDropComponentOnCanvas(resolvedComponent);
   };
 
@@ -742,12 +942,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   };
 
   const viewportLabel = canvasWidthPx
-    ? `${canvasWidthPx}px · ${viewport.charAt(0).toUpperCase() + viewport.slice(1)}`
+    ? `${canvasWidthPx}px · ${viewport === 'all' ? 'All Viewports' : viewport.charAt(0).toUpperCase() + viewport.slice(1)}`
     : viewport === 'mobile'
       ? '375px · Mobile'
       : viewport === 'tablet'
         ? '768px · Tablet'
-        : 'Responsive · Desktop';
+        : viewport === 'all'
+          ? 'All Viewports'
+          : '1440px · Desktop';
 
   const frameSizeDisplay = frameDrag
     ? `${frameDrag.currentW} × ${frameDrag.currentH} px`
@@ -844,6 +1046,219 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     selectedElement?.inlineStyles['font-size'] || selectedElement?.styles.fontSize || '';
   const selectedColorHex = cssColorToHex(selectedElement?.styles.color || '') || '#0f172a';
   const currentZIndex = Number.parseInt(selectedElement?.styles.zIndex || '0', 10) || 0;
+
+  const renderSelectionOverlay = (frameW: number, frameH: number) => {
+    if (
+      editorMode !== 'edit' ||
+      draggingComponent ||
+      !selectedElement ||
+      !displayRect ||
+      selectedElement.isHidden
+    ) {
+      return null;
+    }
+
+    const alignRight = displayRect.left > Math.max(120, frameW - 290);
+    const canFitBottom = displayRect.top + displayRect.height + 34 <= frameH - 32;
+    const vClass =
+      displayRect.top >= 36 ? '-top-7' : canFitBottom ? '-bottom-7' : 'top-1.5';
+    const hClass = alignRight ? 'right-0' : 'left-0';
+
+    return (
+      <div className="pointer-events-none absolute inset-0 overflow-hidden z-20">
+        {selectedElement.boxModel && activeSpacingOverlay === 'margin' && (
+          <div
+            data-testid="margin-spacing-guide"
+            style={{
+              transform: `translate3d(${Math.round(
+                displayRect.left - selectedElement.boxModel.margin.left
+              )}px, ${Math.round(
+                displayRect.top - selectedElement.boxModel.margin.top
+              )}px, 0)`,
+              width: `${Math.max(
+                1,
+                Math.round(
+                  displayRect.width +
+                    selectedElement.boxModel.margin.left +
+                    selectedElement.boxModel.margin.right
+                )
+              )}px`,
+              height: `${Math.max(
+                1,
+                Math.round(
+                  displayRect.height +
+                    selectedElement.boxModel.margin.top +
+                    selectedElement.boxModel.margin.bottom
+                )
+              )}px`,
+              borderTopWidth: `${selectedElement.boxModel.margin.top}px`,
+              borderRightWidth: `${selectedElement.boxModel.margin.right}px`,
+              borderBottomWidth: `${selectedElement.boxModel.margin.bottom}px`,
+              borderLeftWidth: `${selectedElement.boxModel.margin.left}px`,
+            }}
+            className="absolute top-0 left-0 border-solid border-amber-500/45 box-border"
+          />
+        )}
+
+        <div
+          data-testid="selection-overlay-box"
+          style={{
+            transform: `translate3d(${Math.round(displayRect.left)}px, ${Math.round(displayRect.top)}px, 0)`,
+            width: `${Math.max(1, Math.round(displayRect.width))}px`,
+            height: `${Math.max(1, Math.round(displayRect.height))}px`,
+          }}
+          className="absolute top-0 left-0 border-2 border-indigo-500 shadow-[0_0_0_1px_rgba(99,102,241,0.2)]"
+        >
+          {selectedElement.boxModel && activeSpacingOverlay === 'padding' && (
+            <div
+              data-testid="padding-spacing-guide"
+              style={{
+                borderTopWidth: `${selectedElement.boxModel.padding.top}px`,
+                borderRightWidth: `${selectedElement.boxModel.padding.right}px`,
+                borderBottomWidth: `${selectedElement.boxModel.padding.bottom}px`,
+                borderLeftWidth: `${selectedElement.boxModel.padding.left}px`,
+              }}
+              className="w-full h-full border-solid border-emerald-500/45 box-border"
+            />
+          )}
+
+          <div
+            data-testid="floating-quick-actions"
+            className={`absolute ${hClass} ${vClass} flex items-center gap-1 whitespace-nowrap z-30`}
+          >
+            <span className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-[10.5px] font-mono-tabular font-medium px-2 py-0.5 rounded-md shadow-md">
+              {selectedElement.tagName} ·{' '}
+              {dragState?.kind === 'move'
+                ? `x:${dragState.currentLeft} y:${dragState.currentTop}`
+                : `${liveW} × ${liveH}${aspectRatioLocked ? ' · Locked' : ''}`}
+            </span>
+            <div className="pointer-events-auto inline-flex items-center gap-0.5 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border-strong)] p-0.5 shadow-xl studio-card-highlight">
+              <button
+                type="button"
+                onPointerDown={startMove}
+                aria-label="Move selected element"
+                title="Drag to move element freely"
+                className="inline-flex items-center gap-1 h-6 px-1.5 rounded-md text-[10.5px] font-medium text-[var(--studio-text-strong)] hover:bg-indigo-600 hover:text-white studio-pressable cursor-grab active:cursor-grabbing"
+              >
+                <Move className="w-3 h-3" strokeWidth={1.4} />
+                Move
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiBarOpen((prev) => !prev)}
+                aria-label="Edit selected element with AI"
+                aria-expanded={aiBarOpen}
+                title="Edit selected element with AI"
+                className={`inline-flex items-center gap-1 h-6 px-1.5 rounded-md text-[10.5px] font-medium studio-pressable cursor-pointer ${
+                  aiBarOpen
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-indigo-600 dark:text-indigo-300 hover:bg-indigo-500/15'
+                }`}
+              >
+                <Sparkles className="w-3 h-3 shrink-0" strokeWidth={1.5} />
+                <span>AI</span>
+              </button>
+              <button
+                type="button"
+                onClick={onSelectParent}
+                aria-label="Select parent element"
+                title="Select Parent Element"
+                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+              >
+                <CornerLeftUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                <span className="studio-reveal-label">Parent</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onMoveSibling('up')}
+                aria-label="Move element up"
+                title="Move Up (Alt+↑)"
+                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+              >
+                <ArrowUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                <span className="studio-reveal-label">Up</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onMoveSibling('down')}
+                aria-label="Move element down"
+                title="Move Down (Alt+↓)"
+                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+              >
+                <ArrowDown className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                <span className="studio-reveal-label">Down</span>
+              </button>
+              <button
+                type="button"
+                onClick={onDuplicateSelected}
+                aria-label="Floating duplicate element"
+                title="Duplicate (Ctrl+D)"
+                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+              >
+                <Copy className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                <span className="studio-reveal-label">Duplicate</span>
+              </button>
+              <button
+                type="button"
+                onClick={onViewSelectedInCode}
+                aria-label="View in code editor"
+                title="View in Code"
+                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-cyan-700 dark:text-cyan-300 hover:bg-[var(--studio-hover)] studio-pressable cursor-pointer"
+              >
+                <Code2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                <span className="studio-reveal-label">Code</span>
+              </button>
+              <button
+                type="button"
+                onClick={onRemoveSelected}
+                aria-label="Floating delete element"
+                title="Delete (Del)"
+                className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-red-600 dark:text-red-400 hover:bg-red-500/20 studio-pressable cursor-pointer"
+              >
+                <Trash2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
+                <span className="studio-reveal-label">Delete</span>
+              </button>
+            </div>
+          </div>
+
+          {(Object.keys(HANDLE_POSITIONS) as ResizeHandleDir[]).map((dir) => (
+            <button
+              key={dir}
+              type="button"
+              onPointerDown={(e) => startResize(dir, e)}
+              aria-label={`Resize ${dir}`}
+              style={{ cursor: HANDLE_CURSORS[dir] }}
+              className={`pointer-events-auto z-20 absolute w-3 h-3 rounded-xs bg-white border-2 border-indigo-600 shadow-sm hover:scale-125 transition-transform ${HANDLE_POSITIONS[dir]}`}
+            />
+          ))}
+        </div>
+
+        {aiBarOpen && (() => {
+          const maxLeft = Math.max(8, frameW - 348);
+          const clampedLeft = Math.max(8, Math.min(maxLeft, Math.round(displayRect.left)));
+          const preferredBelowTop = Math.round(displayRect.top + displayRect.height + 10);
+          const maxTop = Math.max(8, frameH - 210);
+          const clampedTop =
+            preferredBelowTop <= maxTop
+              ? preferredBelowTop
+              : Math.max(8, Math.min(maxTop, Math.round(displayRect.top - 160)));
+          return (
+            <div
+              style={{ left: `${clampedLeft}px`, top: `${clampedTop}px` }}
+              className="pointer-events-auto absolute z-40"
+            >
+              <AiElementBar
+                variant="floating"
+                targetTagName={selectedElement.tagName}
+                copilot={aiCopilot}
+                onClose={() => setAiBarOpen(false)}
+              />
+            </div>
+          );
+        })()}
+      </div>
+    );
+  };
 
   return (
     <main className="flex-1 min-w-0 flex flex-col bg-[var(--studio-bg)] min-h-0 overflow-x-hidden">
@@ -1752,12 +2167,236 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
       {/* Preview Stage or Code Editor */}
       {centerTab === 'preview' ? (
+        viewport === 'all' ? (
+          <div
+            ref={multiStageRef}
+            data-testid="multi-artboard-stage"
+            data-canvas-backdrop="true"
+            onPointerDown={(e) => {
+              const target = e.target as HTMLElement;
+              const isBackdrop = target.dataset.canvasBackdrop === 'true';
+              if (e.button === 1 || spacePressed || (e.button === 0 && isBackdrop)) {
+                e.preventDefault();
+                setPanDrag({
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  startPanX: multiPan.x,
+                  startPanY: multiPan.y,
+                });
+              }
+            }}
+            style={{
+              cursor: panDrag ? 'grabbing' : spacePressed ? 'grab' : 'default',
+            }}
+            className="flex-1 min-h-0 relative overflow-hidden canvas-grid-bg select-none"
+          >
+            {!entryHtmlPath ? (
+              <div className="w-full h-full flex items-center justify-center p-6">
+                <div className="max-w-md text-center bg-[var(--studio-surface)] border border-[var(--studio-border)] studio-card-highlight rounded-2xl p-6 shadow-xl">
+                  <h2 className="font-display text-base font-semibold text-[var(--studio-text-strong)] mb-2">
+                    No HTML entry file found
+                  </h2>
+                  <p className="text-xs text-[var(--studio-muted)] leading-relaxed">
+                    Load a project containing an <code className="font-mono-tabular text-[var(--studio-text-strong)]">index.html</code>{' '}
+                    file or select one of the starter templates from the left sidebar to launch the
+                    live preview.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Top Multi-Artboard Context HUD */}
+                <div className="absolute top-3 left-3 right-3 z-30 flex items-center justify-between gap-2 pointer-events-none">
+                  <div className="pointer-events-auto inline-flex items-center gap-2.5 h-8 px-2.5 rounded-lg border border-[var(--studio-border-strong)] bg-[var(--studio-surface)]/95 backdrop-blur-md shadow-lg">
+                    {htmlPages.length > 1 ? (
+                      <select
+                        aria-label="Active preview HTML page"
+                        value={entryHtmlPath}
+                        onChange={(e) => onSwitchPreviewPage(e.target.value)}
+                        className="h-6 rounded-md bg-[var(--studio-bg)] border border-[var(--studio-border)] px-2 text-[11px] font-mono-tabular text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                      >
+                        {htmlPages.map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="font-mono-tabular text-[11px] text-[var(--studio-text-strong)]">
+                        {entryHtmlPath}
+                      </span>
+                    )}
+                    <span className="h-3.5 w-px bg-[var(--studio-border)]" aria-hidden="true" />
+                    <span className="font-mono tabular-nums text-[10.5px] uppercase tracking-[0.18em] text-[var(--studio-muted)]">
+                      3 ARTBOARDS · 1440 / 768 / 375
+                    </span>
+                  </div>
+
+                  <div className="pointer-events-auto inline-flex items-center gap-1.5 h-8 px-2 rounded-lg border border-[var(--studio-border-strong)] bg-[var(--studio-surface)]/95 backdrop-blur-md shadow-lg">
+                    <span className="hidden md:inline-flex items-center gap-1 px-1.5 font-mono tabular-nums text-[10px] uppercase tracking-[0.16em] text-[var(--studio-muted-soft)]">
+                      <Hand className="w-3 h-3" strokeWidth={1.4} />
+                      Drag grid or Space+Drag · Ctrl+Scroll zoom
+                    </span>
+                    <span className="hidden md:inline-block h-3.5 w-px bg-[var(--studio-border)]" aria-hidden="true" />
+                    <span
+                      data-testid="multi-artboard-zoom-readout"
+                      className="px-1.5 font-mono tabular-nums text-[10.5px] uppercase tracking-[0.16em] text-[var(--studio-text-strong)]"
+                    >
+                      {Math.round(zoomScale * 100)}%
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMultiPan({ x: 0, y: 0 });
+                        setMultiCustomZoom(null);
+                        onChangeCanvasZoom('fit');
+                      }}
+                      title="Fit all 3 artboards and center stage"
+                      className="h-6 px-2 rounded border border-[var(--studio-border)] bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] font-mono tabular-nums text-[10px] uppercase tracking-[0.14em] text-[var(--studio-text)] studio-pressable cursor-pointer"
+                    >
+                      Fit All
+                    </button>
+                    <HoverIconButton
+                      onClick={onRefreshPreview}
+                      label="Reload"
+                      ariaLabel="Reload all artboards"
+                      title="Reload all artboards"
+                      size="xs"
+                      icon={<RefreshCw className="w-3 h-3 text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]" strokeWidth={1.4} />}
+                    />
+                  </div>
+                </div>
+
+                {/* Pannable / Zoomable Multi-Artboard Plane */}
+                <div
+                  data-canvas-backdrop="true"
+                  className="w-full h-full flex items-center justify-center overflow-hidden pt-10"
+                >
+                  <div
+                    data-canvas-backdrop="true"
+                    style={{
+                      width: `${MULTI_ARTBOARD_TOTAL_W}px`,
+                      transform: `translate3d(${multiPan.x}px, ${multiPan.y}px, 0) scale(${zoomScale})`,
+                      transformOrigin: 'center center',
+                    }}
+                    className="shrink-0 flex items-start gap-12 transition-transform duration-75 ease-out will-change-transform"
+                  >
+                    {MULTI_ARTBOARD_DEFS.map((board) => {
+                      const isActive = activeArtboard === board.id;
+                      return (
+                        <section
+                          key={board.id}
+                          data-testid={`artboard-${board.id}`}
+                          aria-label={`${board.label} ${board.widthPx}px artboard`}
+                          style={{ width: `${board.widthPx}px` }}
+                          className="shrink-0 flex flex-col"
+                        >
+                          <div className="mb-2.5 flex items-center justify-between gap-2 px-0.5">
+                            <button
+                              type="button"
+                              onClick={() => onSelectArtboard(board.id)}
+                              className="inline-flex items-center gap-2 cursor-pointer group"
+                              title={`Focus ${board.label} (${board.widthPx}px) artboard`}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                                  isActive
+                                    ? 'bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.75)]'
+                                    : 'bg-[var(--studio-muted-soft)] group-hover:bg-indigo-400'
+                                }`}
+                              />
+                              <span
+                                className={`font-mono tabular-nums text-[10.5px] uppercase tracking-[0.18em] transition-colors ${
+                                  isActive
+                                    ? 'text-[var(--studio-text-strong)] font-semibold'
+                                    : 'text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]'
+                                }`}
+                              >
+                                {board.label} · {board.widthPx}PX
+                              </span>
+                            </button>
+
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono tabular-nums text-[10px] uppercase tracking-[0.18em] text-[var(--studio-muted-soft)]">
+                                {board.widthPx} × {board.heightPx}
+                              </span>
+                              {onChangeViewport && (
+                                <button
+                                  type="button"
+                                  onClick={() => onChangeViewport(board.id)}
+                                  aria-label={`Solo ${board.label} viewport`}
+                                  title={`Focus ${board.label} viewport alone`}
+                                  className="inline-flex items-center gap-1 h-5 px-1.5 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] hover:bg-[var(--studio-hover)] font-mono tabular-nums text-[10px] uppercase tracking-[0.14em] text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
+                                >
+                                  <Maximize2 className="w-2.5 h-2.5" strokeWidth={1.5} />
+                                  <span>Solo</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          <div
+                            onPointerDown={() => {
+                              if (activeArtboard !== board.id) {
+                                onSelectArtboard(board.id);
+                              }
+                            }}
+                            style={{
+                              width: `${board.widthPx}px`,
+                              height: `${board.heightPx}px`,
+                            }}
+                            className={`relative rounded-lg border bg-white shadow-2xl overflow-hidden transition-shadow ${
+                              isActive
+                                ? 'border-indigo-500/80 ring-2 ring-indigo-500/20'
+                                : 'border-[var(--studio-border-strong)] hover:border-indigo-400/50'
+                            }`}
+                          >
+                            <iframe
+                              key={`${board.id}-${previewKey}`}
+                              name={`ve-artboard:${board.id}`}
+                              ref={(el) => {
+                                artboardIframesRef.current[board.id] = el;
+                                onRegisterArtboardIframe(board.id, el);
+                                if (board.id === activeArtboard) {
+                                  (iframeRef as { current: HTMLIFrameElement | null }).current = el;
+                                }
+                              }}
+                              title={`${board.label} ${board.widthPx}px Preview`}
+                              data-testid={`artboard-iframe-${board.id}`}
+                              srcDoc={srcDoc}
+                              sandbox="allow-scripts allow-forms allow-popups"
+                              className={`w-full h-full border-0 block bg-white ${
+                                panDrag || spacePressed || dragState || draggingComponent
+                                  ? 'pointer-events-none select-none'
+                                  : ''
+                              }`}
+                            />
+                            {draggingComponent && (
+                              <div
+                                data-testid={`artboard-drop-overlay-${board.id}`}
+                                onDragOver={(e) => handleDragOverCanvas(e, board.id)}
+                                onDragLeave={() => onPostIframeMessage({ type: 'CLEAR_DROP_TARGET' }, board.id)}
+                                onDrop={(e) => handleDropCanvas(e, board.id)}
+                                className="absolute inset-0 z-30 bg-emerald-500/5 border-2 border-dashed border-emerald-500/50"
+                              />
+                            )}
+                            {isActive && renderSelectionOverlay(board.widthPx, board.heightPx)}
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
         <div
           ref={stageScrollRef}
-          className="flex-1 min-h-0 overflow-auto builder-scroll canvas-grid-bg p-5 flex justify-center items-start"
+          className="flex-1 min-h-0 overflow-auto builder-scroll canvas-grid-bg p-5 flex items-start"
         >
           {!entryHtmlPath ? (
-            <div className="self-center max-w-md text-center bg-[var(--studio-surface)] border border-[var(--studio-border)] studio-card-highlight rounded-2xl p-6 shadow-xl">
+            <div className="m-auto max-w-md text-center bg-[var(--studio-surface)] border border-[var(--studio-border)] studio-card-highlight rounded-2xl p-6 shadow-xl">
               <h2 className="font-display text-base font-semibold text-[var(--studio-text-strong)] mb-2">
                 No HTML entry file found
               </h2>
@@ -1769,7 +2408,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             </div>
           ) : (
             <div
-              className="relative shrink-0"
+              className="relative shrink-0 mx-auto"
               style={{
                 width: `${Math.round(effectiveFrameWidthPx * zoomScale)}px`,
                 height: `${Math.round(effectiveFrameHeightPx * zoomScale)}px`,
@@ -1897,6 +2536,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 >
                   <iframe
                     key={previewKey}
+                    name={`ve-artboard:${viewport}`}
                     ref={iframeRef}
                     title="Live App Preview"
                     srcDoc={srcDoc}
@@ -1912,197 +2552,21 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   {draggingComponent && (
                     <div
                       data-testid="canvas-drop-overlay"
-                      onDragOver={handleDragOverCanvas}
+                      onDragOver={(e) => handleDragOverCanvas(e)}
                       onDragLeave={() => onPostIframeMessage({ type: 'CLEAR_DROP_TARGET' })}
-                      onDrop={handleDropCanvas}
+                      onDrop={(e) => handleDropCanvas(e)}
                       className="absolute inset-0 z-30 bg-emerald-500/5 border-2 border-dashed border-emerald-500/50"
                     />
                   )}
 
                   {/* Visual Selection, Spacing Guides, Quick Action Bar & 8-Handle Resize Overlay */}
-                  {editorMode === 'edit' &&
-                    !draggingComponent &&
-                    selectedElement &&
-                    displayRect &&
-                    !selectedElement.isHidden && (
-                      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-                        {/* Box-Model Margin & Padding Visual Overlays */}
-                        {selectedElement.boxModel && activeSpacingOverlay === 'margin' && (
-                          <div
-                            data-testid="margin-spacing-guide"
-                            style={{
-                              transform: `translate3d(${Math.round(
-                                displayRect.left - selectedElement.boxModel.margin.left
-                              )}px, ${Math.round(
-                                displayRect.top - selectedElement.boxModel.margin.top
-                              )}px, 0)`,
-                              width: `${Math.max(
-                                1,
-                                Math.round(
-                                  displayRect.width +
-                                    selectedElement.boxModel.margin.left +
-                                    selectedElement.boxModel.margin.right
-                                )
-                              )}px`,
-                              height: `${Math.max(
-                                1,
-                                Math.round(
-                                  displayRect.height +
-                                    selectedElement.boxModel.margin.top +
-                                    selectedElement.boxModel.margin.bottom
-                                )
-                              )}px`,
-                              borderTopWidth: `${selectedElement.boxModel.margin.top}px`,
-                              borderRightWidth: `${selectedElement.boxModel.margin.right}px`,
-                              borderBottomWidth: `${selectedElement.boxModel.margin.bottom}px`,
-                              borderLeftWidth: `${selectedElement.boxModel.margin.left}px`,
-                            }}
-                            className="absolute top-0 left-0 border-solid border-amber-500/45 box-border"
-                          />
-                        )}
-
-                        <div
-                          data-testid="selection-overlay-box"
-                          style={{
-                            transform: `translate3d(${Math.round(displayRect.left)}px, ${Math.round(displayRect.top)}px, 0)`,
-                            width: `${Math.max(1, Math.round(displayRect.width))}px`,
-                            height: `${Math.max(1, Math.round(displayRect.height))}px`,
-                          }}
-                          className="absolute top-0 left-0 border-2 border-indigo-500 shadow-[0_0_0_1px_rgba(99,102,241,0.2)]"
-                        >
-                          {/* Inner Padding Guide */}
-                          {selectedElement.boxModel && activeSpacingOverlay === 'padding' && (
-                            <div
-                              data-testid="padding-spacing-guide"
-                              style={{
-                                borderTopWidth: `${selectedElement.boxModel.padding.top}px`,
-                                borderRightWidth: `${selectedElement.boxModel.padding.right}px`,
-                                borderBottomWidth: `${selectedElement.boxModel.padding.bottom}px`,
-                                borderLeftWidth: `${selectedElement.boxModel.padding.left}px`,
-                              }}
-                              className="w-full h-full border-solid border-emerald-500/45 box-border"
-                            />
-                          )}
-
-                          {/* Floating Element Label, Move Grip & Quick-Action Bar */}
-                          {(() => {
-                            const alignRight =
-                              displayRect.left > Math.max(120, effectiveFrameWidthPx - 290);
-                            const canFitBottom =
-                              displayRect.top + displayRect.height + 34 <=
-                              effectiveFrameHeightPx - 32;
-                            const vClass =
-                              displayRect.top >= 36
-                                ? '-top-7'
-                                : canFitBottom
-                                  ? '-bottom-7'
-                                  : 'top-1.5';
-                            const hClass = alignRight ? 'right-0' : 'left-0';
-                            return (
-                              <div
-                                data-testid="floating-quick-actions"
-                                className={`absolute ${hClass} ${vClass} flex items-center gap-1 whitespace-nowrap z-30`}
-                              >
-                                <span className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-[10.5px] font-mono-tabular font-medium px-2 py-0.5 rounded-md shadow-md">
-                                  {selectedElement.tagName} ·{' '}
-                                  {dragState?.kind === 'move'
-                                    ? `x:${dragState.currentLeft} y:${dragState.currentTop}`
-                                    : `${liveW} × ${liveH}${aspectRatioLocked ? ' · Locked' : ''}`}
-                                </span>
-                                <div className="pointer-events-auto inline-flex items-center gap-0.5 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border-strong)] p-0.5 shadow-xl studio-card-highlight">
-                                  <button
-                                    type="button"
-                                    onPointerDown={startMove}
-                                    aria-label="Move selected element"
-                                    title="Drag to move element freely"
-                                    className="inline-flex items-center gap-1 h-6 px-1.5 rounded-md text-[10.5px] font-medium text-[var(--studio-text-strong)] hover:bg-indigo-600 hover:text-white studio-pressable cursor-grab active:cursor-grabbing"
-                                  >
-                                    <Move className="w-3 h-3" strokeWidth={1.4} />
-                                    Move
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={onSelectParent}
-                                    aria-label="Select parent element"
-                                    title="Select Parent Element"
-                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
-                                  >
-                                    <CornerLeftUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                    <span className="studio-reveal-label">Parent</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => onMoveSibling('up')}
-                                    aria-label="Move element up"
-                                    title="Move Up (Alt+↑)"
-                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
-                                  >
-                                    <ArrowUp className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                    <span className="studio-reveal-label">Up</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => onMoveSibling('down')}
-                                    aria-label="Move element down"
-                                    title="Move Down (Alt+↓)"
-                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
-                                  >
-                                    <ArrowDown className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                    <span className="studio-reveal-label">Down</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={onDuplicateSelected}
-                                    aria-label="Floating duplicate element"
-                                    title="Duplicate (Ctrl+D)"
-                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-[var(--studio-muted)] hover:bg-[var(--studio-hover)] hover:text-[var(--studio-text-strong)] studio-pressable cursor-pointer"
-                                  >
-                                    <Copy className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                    <span className="studio-reveal-label">Duplicate</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={onViewSelectedInCode}
-                                    aria-label="View in code editor"
-                                    title="View in Code"
-                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-cyan-700 dark:text-cyan-300 hover:bg-[var(--studio-hover)] studio-pressable cursor-pointer"
-                                  >
-                                    <Code2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                    <span className="studio-reveal-label">Code</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={onRemoveSelected}
-                                    aria-label="Floating delete element"
-                                    title="Delete (Del)"
-                                    className="group inline-flex items-center h-6 px-1 rounded-md text-[10.5px] font-medium text-red-600 dark:text-red-400 hover:bg-red-500/20 studio-pressable cursor-pointer"
-                                  >
-                                    <Trash2 className="w-3 h-3 shrink-0" strokeWidth={1.4} />
-                                    <span className="studio-reveal-label">Delete</span>
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })()}
-
-                          {(Object.keys(HANDLE_POSITIONS) as ResizeHandleDir[]).map((dir) => (
-                            <button
-                              key={dir}
-                              type="button"
-                              onPointerDown={(e) => startResize(dir, e)}
-                              aria-label={`Resize ${dir}`}
-                              style={{ cursor: HANDLE_CURSORS[dir] }}
-                              className={`pointer-events-auto z-20 absolute w-3 h-3 rounded-xs bg-white border-2 border-indigo-600 shadow-sm hover:scale-125 transition-transform ${HANDLE_POSITIONS[dir]}`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                  {renderSelectionOverlay(effectiveFrameWidthPx, effectiveFrameHeightPx)}
                 </div>
               </div>
             </div>
           )}
         </div>
+        )
       ) : (
         /* Code Editor Tab */
         <div className="flex-1 min-h-0 flex flex-col bg-[var(--studio-bg)]" data-code-editor="true">

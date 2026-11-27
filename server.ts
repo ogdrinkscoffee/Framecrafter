@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
+import { editElementWithGemini } from './serverAi.ts';
 import { bundleProjectFiles } from './serverBundler.ts';
 import {
   exchangeGitHubOAuthCode,
@@ -27,6 +28,7 @@ import {
 import type { GitHubUserProfile } from './src/utils/githubSync.ts';
 import {
   createSlidingWindowRateLimiter,
+  validateAiEditElementPayload,
   validateBundleProjectPayload,
   validateGithubOAuthExchangePayload,
   validateGithubPullPayload,
@@ -129,6 +131,10 @@ async function startServer() {
     maxRequests: 45,
     windowMs: 60_000,
   });
+  const aiRateLimiter = createSlidingWindowRateLimiter({
+    maxRequests: 20,
+    windowMs: 60_000,
+  });
 
   const enforceRateLimit = (
     limiter: ReturnType<typeof createSlidingWindowRateLimiter>,
@@ -171,6 +177,35 @@ async function startServer() {
     } catch (err) {
       console.error('Bundle project route error:', err);
       res.status(500).json({ error: 'Unable to bundle project files right now.' });
+    }
+  });
+
+  app.post('/api/ai/edit-element', async (req, res) => {
+    if (!enforceRateLimit(aiRateLimiter, req, res)) return;
+    try {
+      const validated = validateAiEditElementPayload(req.body);
+      if (!validated.ok) {
+        res.status(400).json({ ok: false, error: validated.error });
+        return;
+      }
+
+      const result = await editElementWithGemini(validated.data);
+      if (!result.ok) {
+        res.status(result.status).json({ ok: false, error: result.error });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        updatedCode: result.updatedCode,
+        explanation: result.explanation,
+      });
+    } catch (err) {
+      console.error('AI edit-element route error:', err);
+      res.status(500).json({
+        ok: false,
+        error: 'Unable to process AI element edit right now.',
+      });
     }
   });
 

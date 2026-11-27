@@ -1,8 +1,36 @@
-import type { ProjectFile } from '../types/editor';
+import type { ProjectFile, ResponsiveScope } from '../types/editor';
 import { isNonRuntimeBundleFile } from './projectBundler';
 
 const OVERRIDE_CSS_CANDIDATES = ['src/framecraft-edits.css', 'framecraft-edits.css'];
 const OVERRIDE_JS_CANDIDATES = ['src/framecraft-edits.js', 'framecraft-edits.js'];
+
+const SCOPE_MEDIA_QUERY: Record<Exclude<ResponsiveScope, 'all'>, string> = {
+  desktop: '@media (min-width: 769px)',
+  tablet: '@media (max-width: 768px) and (min-width: 481px)',
+  mobile: '@media (max-width: 480px)',
+};
+
+const SCOPE_ORDER: Record<ResponsiveScope, number> = {
+  all: 0,
+  desktop: 1,
+  tablet: 2,
+  mobile: 3,
+};
+
+function makeOverrideBlockKey(selector: string, scope: ResponsiveScope = 'all'): string {
+  return scope === 'all' ? selector : `${scope}::${selector}`;
+}
+
+function parseOverrideBlockKey(rawKey: string): { scope: ResponsiveScope; selector: string } {
+  const trimmed = rawKey.trim();
+  for (const sc of ['desktop', 'tablet', 'mobile'] as const) {
+    const prefix = `${sc}::`;
+    if (trimmed.startsWith(prefix)) {
+      return { scope: sc, selector: trimmed.slice(prefix.length).trim() };
+    }
+  }
+  return { scope: 'all', selector: trimmed };
+}
 
 function getPreferredOverrideCssPath(files: ProjectFile[]): string {
   const existing = files.find((f) => OVERRIDE_CSS_CANDIDATES.includes(f.path));
@@ -25,11 +53,12 @@ function parseOverrideCssBlocks(cssContent: string): Map<string, Record<string, 
   let match: RegExpExecArray | null;
 
   while ((match = blockRe.exec(cssContent)) !== null) {
-    const selector = match[1].trim();
+    const key = match[1].trim();
     const ruleBody = match[2];
-    const openBrace = ruleBody.indexOf('{');
-    const closeBrace = ruleBody.lastIndexOf('}');
-    if (openBrace === -1 || closeBrace <= openBrace) continue;
+    const openBrace = ruleBody.lastIndexOf('{');
+    if (openBrace === -1) continue;
+    const closeBrace = ruleBody.indexOf('}', openBrace);
+    if (closeBrace <= openBrace) continue;
     const declsText = ruleBody.slice(openBrace + 1, closeBrace);
     const props: Record<string, string> = {};
     for (const rawDecl of declsText.split(';')) {
@@ -42,26 +71,42 @@ function parseOverrideCssBlocks(cssContent: string): Map<string, Record<string, 
       if (prop && val) props[prop] = val;
     }
     if (Object.keys(props).length > 0) {
-      map.set(selector, props);
+      map.set(key, props);
     }
   }
   return map;
 }
 
 function serializeOverrideCssBlocks(map: Map<string, Record<string, string>>): string {
+  const orderedEntries = Array.from(map.entries()).sort((a, b) => {
+    const sa = parseOverrideBlockKey(a[0]).scope;
+    const sb = parseOverrideBlockKey(b[0]).scope;
+    return SCOPE_ORDER[sa] - SCOPE_ORDER[sb];
+  });
+
   const blocks: string[] = [];
-  for (const [selector, props] of map.entries()) {
+  for (const [key, props] of orderedEntries) {
     const entries = Object.entries(props).filter(([, v]) => Boolean(v));
     if (entries.length === 0) continue;
+    const { scope, selector } = parseOverrideBlockKey(key);
+    const indent = scope === 'all' ? '  ' : '    ';
     const decls = entries
       .map(([prop, rawVal]) => {
         const val = /\!important\s*$/i.test(rawVal) ? rawVal : `${rawVal} !important`;
-        return `  ${prop}: ${val};`;
+        return `${indent}${prop}: ${val};`;
       })
       .join('\n');
-    blocks.push(
-      `/* @framecraft-selector:${selector} */\n${selector} {\n${decls}\n}\n/* /@framecraft-selector */`
-    );
+
+    if (scope === 'all') {
+      blocks.push(
+        `/* @framecraft-selector:${key} */\n${selector} {\n${decls}\n}\n/* /@framecraft-selector */`
+      );
+    } else {
+      const mq = SCOPE_MEDIA_QUERY[scope];
+      blocks.push(
+        `/* @framecraft-selector:${key} */\n${mq} {\n  ${selector} {\n${decls}\n  }\n}\n/* /@framecraft-selector */`
+      );
+    }
   }
   return blocks.join('\n\n') + (blocks.length > 0 ? '\n' : '');
 }
@@ -82,16 +127,47 @@ function ensureCssImportedInEntry(files: ProjectFile[], assetPath: string): Proj
   );
 }
 
+export function getRuntimeStyleOverridesFromCss(
+  cssContent: string,
+  selector: string,
+  scope: ResponsiveScope = 'all'
+): Record<string, string> {
+  if (!cssContent || !selector.trim()) return {};
+  const map = parseOverrideCssBlocks(cssContent);
+  const raw = map.get(makeOverrideBlockKey(selector, scope)) ?? {};
+  const cleaned: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    cleaned[k] = v.replace(/\s*!important\s*$/i, '').trim();
+  }
+  return cleaned;
+}
+
+export function getRuntimeDeviceVisibilityFromCss(
+  cssContent: string,
+  selector: string
+): { desktop: boolean; tablet: boolean; mobile: boolean } {
+  if (!cssContent || !selector.trim()) {
+    return { desktop: true, tablet: true, mobile: true };
+  }
+  return {
+    desktop: getRuntimeStyleOverridesFromCss(cssContent, selector, 'desktop').display !== 'none',
+    tablet: getRuntimeStyleOverridesFromCss(cssContent, selector, 'tablet').display !== 'none',
+    mobile: getRuntimeStyleOverridesFromCss(cssContent, selector, 'mobile').display !== 'none',
+  };
+}
+
 export function applyRuntimeStylePatchToFiles(
   files: ProjectFile[],
   selector: string,
-  styles: Record<string, string | null>
+  styles: Record<string, string | null>,
+  scope: ResponsiveScope = 'all'
 ): ProjectFile[] {
   if (!selector.trim()) return files;
   const cssPath = getPreferredOverrideCssPath(files);
   const existing = files.find((f) => f.path === cssPath);
   const map = parseOverrideCssBlocks(existing?.content ?? '');
-  const current = { ...(map.get(selector) ?? {}) };
+  const blockKey = makeOverrideBlockKey(selector, scope);
+  const current = { ...(map.get(blockKey) ?? {}) };
 
   for (const [prop, val] of Object.entries(styles)) {
     const normProp = prop.trim().toLowerCase();
@@ -104,9 +180,9 @@ export function applyRuntimeStylePatchToFiles(
   }
 
   if (Object.keys(current).length === 0) {
-    map.delete(selector);
+    map.delete(blockKey);
   } else {
-    map.set(selector, current);
+    map.set(blockKey, current);
   }
 
   const nextCssContent = serializeOverrideCssBlocks(map);

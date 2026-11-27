@@ -53,6 +53,11 @@ import {
 import { FONT_CATEGORIES, STUDIO_FONT_CATALOG, matchStudioFontOption } from '../utils/fontLibrary';
 import { isImageAssetPath, toSvgDataUrl } from '../utils/projectBundler';
 import { getNodeDeviceVisibility, getResponsiveNodeStyles } from '../utils/responsiveCss';
+import {
+  getRuntimeDeviceVisibilityFromCss,
+  getRuntimeStyleOverridesFromCss,
+} from '../utils/reactVisualSync';
+import { AiElementBar, type AiElementCopilotControls } from './AiElementBar';
 import { HoverIconButton } from './StudioPrimitives';
 
 interface InspectorPanelProps {
@@ -64,6 +69,7 @@ interface InspectorPanelProps {
   responsiveScope: ResponsiveScope;
   onChangeResponsiveScope: (scope: ResponsiveScope) => void;
   stylesCssContent: string;
+  overrideCssContent?: string;
   activeHtmlContent: string;
   htmlPages: string[];
   onPreviewStyle: (styles: Record<string, string>) => void;
@@ -91,10 +97,11 @@ interface InspectorPanelProps {
   onToggleVisibility: () => void;
   onViewInCode: () => void;
   onHoverSpacing: (kind: 'margin' | 'padding' | null) => void;
+  aiCopilot: AiElementCopilotControls;
 }
 
 const SCOPE_LABELS: Record<ResponsiveScope, string> = {
-  all: 'Base styles (all screen sizes)',
+  all: 'All Breakpoints (base styles across viewports)',
   desktop: 'Desktop view only (≥ 769px)',
   tablet: 'Tablet view only (481px – 768px)',
   mobile: 'Mobile view only (≤ 480px)',
@@ -111,6 +118,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   responsiveScope,
   onChangeResponsiveScope,
   stylesCssContent,
+  overrideCssContent = '',
   activeHtmlContent,
   htmlPages,
   onPreviewStyle,
@@ -134,6 +142,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onToggleVisibility,
   onViewInCode,
   onHoverSpacing,
+  aiCopilot,
 }) => {
   const [textDraft, setTextDraft] = useState('');
   const [widthDraft, setWidthDraft] = useState('');
@@ -188,15 +197,41 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     };
   }, []);
 
-  const scopeOverrides = useMemo(
-    () => getResponsiveNodeStyles(stylesCssContent, selectedElement?.veNode ?? null, responsiveScope),
-    [stylesCssContent, selectedElement?.veNode, responsiveScope]
-  );
+  const runtimeSelector =
+    selectedElement?.uniqueSelector || selectedElement?.selectorPath || '';
 
-  const deviceVisibility = useMemo(
-    () => getNodeDeviceVisibility(stylesCssContent, selectedElement?.veNode ?? null),
-    [stylesCssContent, selectedElement?.veNode]
-  );
+  const scopeOverrides = useMemo(() => {
+    if (selectedElement?.veNode) {
+      return getResponsiveNodeStyles(stylesCssContent, selectedElement.veNode, responsiveScope);
+    }
+    if (!selectedElement?.veId && runtimeSelector && overrideCssContent) {
+      return getRuntimeStyleOverridesFromCss(overrideCssContent, runtimeSelector, responsiveScope);
+    }
+    return {};
+  }, [
+    stylesCssContent,
+    overrideCssContent,
+    selectedElement?.veNode,
+    selectedElement?.veId,
+    runtimeSelector,
+    responsiveScope,
+  ]);
+
+  const deviceVisibility = useMemo(() => {
+    if (selectedElement?.veNode) {
+      return getNodeDeviceVisibility(stylesCssContent, selectedElement.veNode);
+    }
+    if (!selectedElement?.veId && runtimeSelector && overrideCssContent) {
+      return getRuntimeDeviceVisibilityFromCss(overrideCssContent, runtimeSelector);
+    }
+    return { desktop: true, tablet: true, mobile: true };
+  }, [
+    stylesCssContent,
+    overrideCssContent,
+    selectedElement?.veNode,
+    selectedElement?.veId,
+    runtimeSelector,
+  ]);
 
   const sectionIds = useMemo(
     () => listHtmlElementIds(activeHtmlContent),
@@ -690,6 +725,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <button
                 key={scope}
                 type="button"
+                title={SCOPE_LABELS[scope]}
                 onClick={() => onChangeResponsiveScope(scope)}
                 aria-pressed={responsiveScope === scope}
                 className={`h-full rounded-md text-[11px] font-medium capitalize studio-pressable cursor-pointer ${
@@ -702,7 +738,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
                 }`}
               >
-                {scope}
+                {scope === 'all' ? 'All' : scope}
               </button>
             ))}
           </div>
@@ -733,6 +769,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
       {/* Scrollable Properties */}
       <div className="flex-1 overflow-y-auto builder-scroll p-3 space-y-4">
+        <AiElementBar
+          variant="inspector"
+          targetTagName={selectedElement.tagName}
+          copilot={aiCopilot}
+        />
+
         {/* Button & Link Action Section */}
         {isActionableTag && (
           <section className="space-y-2.5 pb-4 border-b border-[var(--studio-border)]">

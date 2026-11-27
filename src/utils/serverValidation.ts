@@ -279,3 +279,119 @@ export function validateGithubOAuthExchangePayload(raw: unknown): ValidationResu
     },
   };
 }
+
+export type AiEditFileType = 'html' | 'tsx' | 'jsx' | 'css';
+
+export interface AiEditElementPayload {
+  prompt: string;
+  targetCode: string;
+  fileType: AiEditFileType;
+  designTokens?: Record<string, string>;
+  surroundingContext?: string;
+}
+
+const ALLOWED_AI_FILE_TYPES = new Set<AiEditFileType>(['html', 'tsx', 'jsx', 'css']);
+const MAX_AI_PROMPT_LEN = 1000;
+const MAX_AI_TARGET_CODE_LEN = 15000;
+const MAX_AI_CONTEXT_LEN = 4000;
+const MAX_AI_DESIGN_TOKENS = 60;
+
+export function validateAiEditElementPayload(
+  raw: unknown
+): ValidationResult<AiEditElementPayload> {
+  if (!isPlainObject(raw)) {
+    return { ok: false, error: 'Invalid request body.' };
+  }
+
+  if (typeof raw.prompt !== 'string') {
+    return { ok: false, error: 'Prompt must be a string.' };
+  }
+  const prompt = raw.prompt.trim();
+  if (!prompt) {
+    return { ok: false, error: 'Prompt is required.' };
+  }
+  if (prompt.length > MAX_AI_PROMPT_LEN) {
+    return {
+      ok: false,
+      error: `Prompt exceeds maximum length of ${MAX_AI_PROMPT_LEN} characters.`,
+    };
+  }
+
+  if (typeof raw.targetCode !== 'string') {
+    return { ok: false, error: 'targetCode must be a string.' };
+  }
+  const targetCode = raw.targetCode.trim();
+  if (!targetCode) {
+    return { ok: false, error: 'targetCode is required.' };
+  }
+  if (raw.targetCode.length > MAX_AI_TARGET_CODE_LEN) {
+    return {
+      ok: false,
+      error: `targetCode exceeds maximum length of ${MAX_AI_TARGET_CODE_LEN} characters.`,
+    };
+  }
+
+  if (
+    typeof raw.fileType !== 'string' ||
+    !ALLOWED_AI_FILE_TYPES.has(raw.fileType as AiEditFileType)
+  ) {
+    return {
+      ok: false,
+      error: 'fileType must be one of html, tsx, jsx, or css.',
+    };
+  }
+  const fileType = raw.fileType as AiEditFileType;
+
+  let designTokens: Record<string, string> | undefined;
+  if (raw.designTokens !== undefined && raw.designTokens !== null) {
+    if (!isPlainObject(raw.designTokens)) {
+      return { ok: false, error: 'designTokens must be an object of CSS token values.' };
+    }
+    const entries = Object.entries(raw.designTokens);
+    if (entries.length > MAX_AI_DESIGN_TOKENS) {
+      return {
+        ok: false,
+        error: `Too many designTokens provided (max ${MAX_AI_DESIGN_TOKENS}).`,
+      };
+    }
+    const cleanTokens: Record<string, string> = {};
+    for (const [k, v] of entries) {
+      if (typeof v !== 'string') {
+        return { ok: false, error: 'Every designTokens entry must map to a string value.' };
+      }
+      const cleanKey = k.trim().slice(0, 80);
+      const cleanVal = v.trim().slice(0, 200);
+      if (cleanKey && cleanVal) {
+        cleanTokens[cleanKey] = cleanVal;
+      }
+    }
+    if (Object.keys(cleanTokens).length > 0) {
+      designTokens = cleanTokens;
+    }
+  }
+
+  let surroundingContext: string | undefined;
+  if (raw.surroundingContext !== undefined && raw.surroundingContext !== null) {
+    if (typeof raw.surroundingContext !== 'string') {
+      return { ok: false, error: 'surroundingContext must be a string.' };
+    }
+    const trimmedContext = raw.surroundingContext.trim();
+    if (trimmedContext) {
+      surroundingContext =
+        trimmedContext.length > MAX_AI_CONTEXT_LEN
+          ? trimmedContext.slice(0, MAX_AI_CONTEXT_LEN)
+          : trimmedContext;
+    }
+  }
+
+  return {
+    ok: true,
+    data: {
+      prompt,
+      targetCode,
+      fileType,
+      ...(designTokens ? { designTokens } : {}),
+      ...(surroundingContext ? { surroundingContext } : {}),
+    },
+  };
+}

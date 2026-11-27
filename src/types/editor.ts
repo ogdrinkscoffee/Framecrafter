@@ -12,7 +12,9 @@ export interface ProjectFile {
   blobUrl?: string;
 }
 
-export type ViewportPreset = 'desktop' | 'tablet' | 'mobile';
+export type ArtboardId = 'desktop' | 'tablet' | 'mobile';
+
+export type ViewportPreset = ArtboardId | 'all';
 
 export type ResponsiveScope = 'all' | 'desktop' | 'tablet' | 'mobile';
 

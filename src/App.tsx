@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Blocks, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { CanvasWorkspace } from './components/CanvasWorkspace';
+import type { AiElementCopilotControls } from './components/AiElementBar';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { ComponentLibraryDrawer } from './components/ComponentLibraryDrawer';
 import { FileExplorer } from './components/FileExplorer';
@@ -11,6 +12,7 @@ import { ShortcutsModal } from './components/ShortcutsModal';
 import { StartHub } from './components/StartHub';
 import { TopToolbar } from './components/TopToolbar';
 import type {
+  ArtboardId,
   AutoSaveStatus,
   CanvasZoomMode,
   CenterTab,
@@ -27,6 +29,11 @@ import type {
   StudioThemeId,
   ViewportPreset,
 } from './types/editor';
+import {
+  commitAiElementPatchWithHistory,
+  extractDesignTokensMap,
+  extractElementSourceSlice,
+} from './utils/aiElementSync';
 import { findElementSourceLocation, insertQuickComponentInProject } from './utils/codeSync';
 import { DRAGGABLE_COMPONENTS } from './utils/componentCatalog';
 import { deleteRootCssVariable, updateRootCssVariable } from './utils/cssVariables';
@@ -115,6 +122,7 @@ import {
   applyRuntimeAttrPatchToFiles,
   applyRuntimeStylePatchToFiles,
   applyRuntimeTextPatchToFiles,
+  getRuntimeDeviceVisibilityFromCss,
 } from './utils/reactVisualSync';
 import {
   getNodeDeviceVisibility,
@@ -203,6 +211,7 @@ export default function App() {
   const [defaultStartupMode, setDefaultStartupMode] = useState<EditorMode>(initialStartupMode);
   const [editorMode, setEditorMode] = useState<EditorMode>(initialStartupMode);
   const [viewport, setViewport] = useState<ViewportPreset>('desktop');
+  const [activeArtboard, setActiveArtboard] = useState<ArtboardId>('desktop');
   const [responsiveScope, setResponsiveScope] = useState<ResponsiveScope>('all');
   const [centerTab, setCenterTab] = useState<CenterTab>('preview');
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('inspector');
@@ -247,6 +256,14 @@ export default function App() {
     null
   );
 
+  // Element-targeted AI Co-Pilot state
+  const [aiPromptDraft, setAiPromptDraft] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiExplanation, setAiExplanation] = useState<string | null>(null);
+  const aiAbortControllerRef = useRef<AbortController | null>(null);
+  const preserveNextAiExplanationRef = useRef(false);
+
   // GitHub Sync & OAuth state (tokens kept strictly in component state memory, never persisted)
   const [githubOpen, setGithubOpen] = useState(false);
   const [githubCommitModalOpen, setGithubCommitModalOpen] = useState(false);
@@ -289,6 +306,15 @@ export default function App() {
   });
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const artboardIframeRefs = useRef<Partial<Record<ArtboardId, HTMLIFrameElement | null>>>({});
+  const activeArtboardRef = useRef<ArtboardId>(activeArtboard);
+  activeArtboardRef.current = activeArtboard;
+  const registerArtboardIframe = useCallback(
+    (boardId: ArtboardId, el: HTMLIFrameElement | null) => {
+      artboardIframeRefs.current[boardId] = el;
+    },
+    []
+  );
   const diskHandleRef = useRef<FileSystemDirectoryHandleLike | null>(null);
   const lastPushedFingerprintRef = useRef<string>('');
   const copiedElementHtmlRef = useRef<{ html: string; tagName: string } | null>(null);
@@ -340,6 +366,14 @@ export default function App() {
     );
   }, [files]);
 
+  const overrideCssFile = useMemo(() => {
+    return (
+      files.find((f) => f.path === 'src/framecraft-edits.css') ??
+      files.find((f) => f.path === 'framecraft-edits.css') ??
+      null
+    );
+  }, [files]);
+
   const [previewKey, setPreviewKey] = useState(1);
   const [renderedSrcDoc, setRenderedSrcDoc] = useState(() => {
     const entry = findEntryHtmlPath(startingFiles);
@@ -354,9 +388,38 @@ export default function App() {
   const codeDirtyRef = useRef(false);
   const bundleSeqRef = useRef(0);
   const selectedOriginalTextRef = useRef('');
+  const historyRef = useRef(history);
+  historyRef.current = history;
+  const selectedElementRef = useRef(selectedElement);
+  selectedElementRef.current = selectedElement;
+  const entryHtmlPathRef = useRef(entryHtmlPath);
+  entryHtmlPathRef.current = entryHtmlPath;
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
+  }, []);
+
+  const resetAiCopilotState = useCallback((clearPrompt = false) => {
+    if (aiAbortControllerRef.current) {
+      aiAbortControllerRef.current.abort();
+      aiAbortControllerRef.current = null;
+    }
+    preserveNextAiExplanationRef.current = false;
+    setAiLoading(false);
+    setAiError(null);
+    setAiExplanation(null);
+    if (clearPrompt) {
+      setAiPromptDraft('');
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (aiAbortControllerRef.current) {
+        aiAbortControllerRef.current.abort();
+        aiAbortControllerRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -413,7 +476,7 @@ export default function App() {
     const onPointerUp = () => {
       setSplitDrag(null);
       window.requestAnimationFrame(() => {
-        postToIframe({ type: 'REQUEST_RECT' });
+        postToIframe({ type: 'REQUEST_RECT' }, activeArtboardRef.current);
       });
     };
     window.addEventListener('pointermove', onPointerMove);
@@ -441,11 +504,53 @@ export default function App() {
     getStaticScriptSignature(startingFiles, findEntryHtmlPath(startingFiles))
   );
 
-  const postToIframe = useCallback((message: Record<string, unknown>) => {
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    win.postMessage({ target: 've-iframe', ...message }, '*');
-  }, []);
+  const getTargetIframeWindows = useCallback(
+    (targetArtboard?: ArtboardId | 'all'): Window[] => {
+      if (viewportRef.current !== 'all') {
+        const win = iframeRef.current?.contentWindow;
+        return win ? [win] : [];
+      }
+      if (targetArtboard && targetArtboard !== 'all') {
+        const win = artboardIframeRefs.current[targetArtboard]?.contentWindow;
+        return win ? [win] : [];
+      }
+      const seen = new Set<Window>();
+      const windows: Window[] = [];
+      for (const boardId of ['desktop', 'tablet', 'mobile'] as ArtboardId[]) {
+        const win = artboardIframeRefs.current[boardId]?.contentWindow;
+        if (win && !seen.has(win)) {
+          seen.add(win);
+          windows.push(win);
+        }
+      }
+      return windows;
+    },
+    []
+  );
+
+  const postToIframe = useCallback(
+    (message: Record<string, unknown>, targetArtboard?: ArtboardId | 'all') => {
+      const windows = getTargetIframeWindows(targetArtboard);
+      for (const win of windows) {
+        win.postMessage({ target: 've-iframe', ...message }, '*');
+      }
+    },
+    [getTargetIframeWindows]
+  );
+
+  const postToSiblingArtboards = useCallback(
+    (sourceArtboard: ArtboardId | null, message: Record<string, unknown>) => {
+      if (viewportRef.current !== 'all') return;
+      for (const boardId of ['desktop', 'tablet', 'mobile'] as ArtboardId[]) {
+        if (sourceArtboard && boardId === sourceArtboard) continue;
+        const win = artboardIframeRefs.current[boardId]?.contentWindow;
+        if (win) {
+          win.postMessage({ target: 've-iframe', ...message }, '*');
+        }
+      }
+    },
+    []
+  );
 
   const rebuildPreview = useCallback(
     (
@@ -517,11 +622,18 @@ export default function App() {
             ? activePreviewHtmlPath
             : findEntryHtmlPath(nextFiles);
 
+      const hasLiveFrame =
+        viewportRef.current === 'all'
+          ? (['desktop', 'tablet', 'mobile'] as ArtboardId[]).some((id) =>
+              Boolean(artboardIframeRefs.current[id]?.contentWindow)
+            )
+          : Boolean(iframeRef.current?.contentWindow);
+
       if (
         !targetPage ||
         showStartHub ||
         centerTab !== 'preview' ||
-        !iframeRef.current?.contentWindow ||
+        !hasLiveFrame ||
         targetPage !== renderedPageRef.current
       ) {
         rebuildPreview(nextFiles, editorMode, selectVeId, pageOverride);
@@ -533,11 +645,24 @@ export default function App() {
         if (nextScriptSig === renderedScriptSigRef.current) {
           const payload = extractHotPatchPayload(nextFiles, targetPage);
           if (payload) {
-            postToIframe({
-              type: 'HOT_PATCH_HTML',
-              ...payload,
-              selectVeId,
-            });
+            const nextCssFile =
+              nextFiles.find((f) => f.path === 'styles.css') ??
+              nextFiles.find((f) => f.type === 'css') ??
+              null;
+            const liveResponsiveCss = nextCssFile
+              ? serializeResponsiveCssStore(parseResponsiveCssStore(nextCssFile.content))
+              : '';
+            postToIframe(
+              {
+                type: 'HOT_PATCH_HTML',
+                ...payload,
+                liveResponsiveCss,
+                selectVeId,
+                primaryArtboardId:
+                  viewportRef.current === 'all' ? activeArtboardRef.current : undefined,
+              },
+              'all'
+            );
             return true;
           }
         }
@@ -559,7 +684,7 @@ export default function App() {
               pf.path === nextNonOverride[idx].path && pf.content === nextNonOverride[idx].content
           );
         if (onlyOverrideChanged) {
-          const overrideCssFile =
+          const nextOverrideCss =
             nextFiles.find((f) => f.path === 'src/framecraft-edits.css') ??
             nextFiles.find((f) => f.path === 'framecraft-edits.css');
           const usedFamilies = collectUsedGoogleFonts(
@@ -567,11 +692,14 @@ export default function App() {
               .filter((f) => f.type === 'html' || f.type === 'css' || f.type === 'js')
               .map((f) => f.content)
           );
-          postToIframe({
-            type: 'HOT_PATCH_CSS',
-            overrideCss: overrideCssFile?.content ?? '',
-            googleFontHref: buildGoogleFontsHref(usedFamilies),
-          });
+          postToIframe(
+            {
+              type: 'HOT_PATCH_CSS',
+              overrideCss: nextOverrideCss?.content ?? '',
+              googleFontHref: buildGoogleFontsHref(usedFamilies),
+            },
+            'all'
+          );
           return true;
         }
       }
@@ -621,10 +749,11 @@ export default function App() {
       setEditorMode(nextMode);
       postToIframe({ type: 'SET_MODE', mode: nextMode });
       if (nextMode === 'interact') {
+        resetAiCopilotState(false);
         setSelectedElement(null);
       }
     },
-    [postToIframe]
+    [postToIframe, resetAiCopilotState]
   );
 
   const handleToggleDefaultStartupMode = useCallback(() => {
@@ -638,9 +767,40 @@ export default function App() {
     );
   }, [defaultStartupMode, showToast]);
 
+  const preAllZoomRef = useRef<CanvasZoomMode | null>(null);
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+  const canvasZoomRef = useRef(canvasZoom);
+  canvasZoomRef.current = canvasZoom;
+
+  const handleChangeCanvasZoom = useCallback((nextZoom: CanvasZoomMode) => {
+    preAllZoomRef.current = null;
+    setCanvasZoom(nextZoom);
+  }, []);
+
   const handleChangeViewport = useCallback((nextViewport: ViewportPreset) => {
+    const prevViewport = viewportRef.current;
     setViewport(nextViewport);
     setCanvasWidthPx(null);
+    if (nextViewport === 'all') {
+      setCanvasHeightPx(null);
+      if (prevViewport !== 'all') {
+        activeArtboardRef.current = prevViewport;
+        setActiveArtboard(prevViewport);
+        preAllZoomRef.current = canvasZoomRef.current;
+        setCanvasZoom('fit');
+      }
+      return;
+    }
+
+    if (prevViewport === 'all' && preAllZoomRef.current !== null) {
+      setCanvasZoom(preAllZoomRef.current);
+      preAllZoomRef.current = null;
+    }
+
+    activeArtboardRef.current = nextViewport;
+    setActiveArtboard(nextViewport);
+
     if (nextViewport === 'mobile') {
       setResponsiveScope('mobile');
     } else if (nextViewport === 'tablet') {
@@ -649,6 +809,30 @@ export default function App() {
       setResponsiveScope((prev) => (prev === 'mobile' || prev === 'tablet' ? 'desktop' : prev));
     }
   }, []);
+
+  const handleSelectArtboard = useCallback(
+    (boardId: ArtboardId) => {
+      activeArtboardRef.current = boardId;
+      setActiveArtboard(boardId);
+      setResponsiveScope(boardId);
+      const currentSelected = selectedElementRef.current;
+      if (currentSelected && viewportRef.current === 'all') {
+        postToIframe(
+          {
+            type: 'SELECT_NODE_ID',
+            veId: currentSelected.veId,
+            rtId: currentSelected.runtimeId,
+            nodeId: currentSelected.veId || currentSelected.runtimeId,
+            uniqueSelector: currentSelected.uniqueSelector,
+            scrollIntoView: false,
+            notifyParent: true,
+          },
+          boardId
+        );
+      }
+    },
+    [postToIframe]
+  );
 
   const handleResizeCanvasFrame = useCallback((widthPx: number | null, heightPx: number | null) => {
     setCanvasWidthPx(widthPx);
@@ -725,13 +909,57 @@ export default function App() {
         return;
       }
 
+      const srcArtboard: ArtboardId | null =
+        data.artboardId === 'desktop' ||
+        data.artboardId === 'tablet' ||
+        data.artboardId === 'mobile'
+          ? data.artboardId
+          : null;
+
       if (data.type === 'DOM_TREE_UPDATE' && Array.isArray(data.nodes)) {
-        setDomTree(data.nodes as DomTreeNode[]);
+        if (viewportRef.current !== 'all' || !srcArtboard || srcArtboard === activeArtboardRef.current) {
+          setDomTree(data.nodes as DomTreeNode[]);
+        }
         return;
       }
 
       if (data.type === 'DOM_MOUNTED') {
-        postToIframe({ type: 'SET_OUTLINES', enabled: showOutlines });
+        const target = srcArtboard ?? 'all';
+        postToIframe({ type: 'SET_MODE', mode: editorMode }, target);
+        postToIframe({ type: 'SET_OUTLINES', enabled: showOutlines }, target);
+        if (
+          viewportRef.current === 'all' &&
+          srcArtboard &&
+          srcArtboard !== activeArtboardRef.current &&
+          selectedElementRef.current
+        ) {
+          const curSel = selectedElementRef.current;
+          postToIframe(
+            {
+              type: 'SELECT_NODE_ID',
+              veId: curSel.veId,
+              rtId: curSel.runtimeId,
+              nodeId: curSel.veId || curSel.runtimeId,
+              uniqueSelector: curSel.uniqueSelector,
+              scrollIntoView: false,
+              silent: true,
+            },
+            srcArtboard
+          );
+        }
+        return;
+      }
+
+      if (data.type === 'ELEMENT_HOVERED') {
+        if (viewportRef.current === 'all' && srcArtboard) {
+          postToSiblingArtboards(srcArtboard, {
+            type: 'HOVER_NODE_ID',
+            nodeId: data.nodeKey ?? null,
+            veId: data.veId ?? null,
+            rtId: data.rtId ?? null,
+            uniqueSelector: data.uniqueSelector ?? null,
+          });
+        }
         return;
       }
 
@@ -758,15 +986,38 @@ export default function App() {
       if (data.type === 'ELEMENT_SELECTED' && data.element) {
         const nextEl = data.element as SelectedElementInfo;
         selectedOriginalTextRef.current = nextEl.textContent || '';
+
+        if (viewportRef.current === 'all' && srcArtboard) {
+          if (srcArtboard !== activeArtboardRef.current) {
+            activeArtboardRef.current = srcArtboard;
+            setActiveArtboard(srcArtboard);
+            setResponsiveScope(srcArtboard);
+          }
+          postToSiblingArtboards(srcArtboard, {
+            type: 'SELECT_NODE_ID',
+            veId: nextEl.veId,
+            rtId: nextEl.runtimeId,
+            nodeId: nextEl.veId || nextEl.runtimeId,
+            uniqueSelector: nextEl.uniqueSelector,
+            scrollIntoView: false,
+            silent: true,
+          });
+        }
+
         setSelectedElement(nextEl);
         setRightPanelTab('inspector');
+        if (preserveNextAiExplanationRef.current) {
+          preserveNextAiExplanationRef.current = false;
+        } else {
+          resetAiCopilotState(false);
+        }
 
         if (copiedFormat) {
           const previewPatch: Record<string, string> = {};
           for (const [k, v] of Object.entries(copiedFormat)) {
             if (v) previewPatch[k] = v;
           }
-          postToIframe({ type: 'PREVIEW_STYLE', styles: previewPatch });
+          postToIframe({ type: 'PREVIEW_STYLE', styles: previewPatch }, 'all');
           if (nextEl.veId && entryHtmlPath) {
             setHistory((prevHistory) => {
               const nextFiles = prevHistory.present.files.map((file) =>
@@ -799,8 +1050,19 @@ export default function App() {
       }
 
       if (data.type === 'ELEMENT_CLEARED') {
+        if (viewportRef.current === 'all' && srcArtboard && srcArtboard !== activeArtboardRef.current) {
+          return;
+        }
         selectedOriginalTextRef.current = '';
+        resetAiCopilotState(false);
         setSelectedElement(null);
+        if (viewportRef.current === 'all') {
+          postToSiblingArtboards(srcArtboard, {
+            type: 'SELECT_VE_ID',
+            veId: null,
+            silent: true,
+          });
+        }
         return;
       }
 
@@ -813,6 +1075,9 @@ export default function App() {
       }
 
       if (data.type === 'RECT_UPDATE' && data.element) {
+        if (viewportRef.current === 'all' && srcArtboard && srcArtboard !== activeArtboardRef.current) {
+          return;
+        }
         setSelectedElement((prev) => {
           if (!prev) return data.element as SelectedElementInfo;
           if (
@@ -828,6 +1093,19 @@ export default function App() {
 
       if (data.type === 'POSITION_COMMITTED' && data.styles) {
         const updatedEl = data.element as SelectedElementInfo;
+        if (viewportRef.current === 'all' && srcArtboard) {
+          if (srcArtboard !== activeArtboardRef.current) {
+            activeArtboardRef.current = srcArtboard;
+            setActiveArtboard(srcArtboard);
+          }
+          postToSiblingArtboards(srcArtboard, {
+            type: 'SYNC_NODE_STYLE',
+            veId: data.veId ?? null,
+            rtId: updatedEl?.runtimeId ?? data.runtimeId ?? null,
+            uniqueSelector: updatedEl?.uniqueSelector ?? null,
+            styles: data.styles,
+          });
+        }
         setSelectedElement(updatedEl);
         if (data.veId && entryHtmlPath) {
           setHistory((prevHistory) => {
@@ -864,6 +1142,15 @@ export default function App() {
             ? data.previousText
             : selectedOriginalTextRef.current;
         selectedOriginalTextRef.current = data.textContent || '';
+        if (viewportRef.current === 'all' && srcArtboard) {
+          postToSiblingArtboards(srcArtboard, {
+            type: 'SYNC_NODE_TEXT',
+            veId: data.veId ?? null,
+            rtId: updatedEl?.runtimeId ?? data.runtimeId ?? null,
+            uniqueSelector: updatedEl?.uniqueSelector ?? null,
+            textContent: data.textContent,
+          });
+        }
         setSelectedElement(updatedEl);
         if (data.veId && entryHtmlPath) {
           setHistory((prevHistory) => {
@@ -901,14 +1188,18 @@ export default function App() {
     handleSwitchPreviewPage,
     copiedFormat,
     postToIframe,
+    postToSiblingArtboards,
     showToast,
     editorMode,
     selectedElement,
     shortcutsModalOpen,
     githubCommitModalOpen,
     commandPaletteOpen,
+    statsModalOpen,
+    globalFindReplaceOpen,
     showStartHub,
     showOutlines,
+    resetAiCopilotState,
   ]);
 
   const applyPatchAndSync = useCallback(
@@ -918,10 +1209,12 @@ export default function App() {
 
       if (!selectedElement.veId || !entryHtmlPath) {
         const sel = selectedElement.uniqueSelector || selectedElement.selectorPath;
+        let runtimeCssText: string | null = null;
+        let updatedNextFiles: ProjectFile[] = historyRef.current.present.files;
         setHistory((prevHistory) => {
           let nextFiles = prevHistory.present.files;
           if (patch.styles && sel) {
-            nextFiles = applyRuntimeStylePatchToFiles(nextFiles, sel, patch.styles);
+            nextFiles = applyRuntimeStylePatchToFiles(nextFiles, sel, patch.styles, 'all');
           }
           if (patch.attributes && sel) {
             nextFiles = applyRuntimeAttrPatchToFiles(nextFiles, sel, patch.attributes);
@@ -937,7 +1230,7 @@ export default function App() {
             selectedOriginalTextRef.current = patch.textContent;
           }
           if (patch.remove && sel) {
-            nextFiles = applyRuntimeStylePatchToFiles(nextFiles, sel, { display: 'none' });
+            nextFiles = applyRuntimeStylePatchToFiles(nextFiles, sel, { display: 'none' }, 'all');
           }
           if (fontPatch && entryHtmlPath) {
             nextFiles = nextFiles.map((file) =>
@@ -946,10 +1239,30 @@ export default function App() {
                 : file
             );
           }
+          updatedNextFiles = nextFiles;
+          const nextOverrideCss =
+            nextFiles.find((f) => f.path === 'src/framecraft-edits.css') ??
+            nextFiles.find((f) => f.path === 'framecraft-edits.css');
+          runtimeCssText = nextOverrideCss?.content ?? null;
           return pushHistoryState(prevHistory, nextFiles, label);
         });
+        if (runtimeCssText !== null && (patch.styles || patch.remove)) {
+          const usedFamilies = collectUsedGoogleFonts(
+            updatedNextFiles
+              .filter((f) => f.type === 'html' || f.type === 'css' || f.type === 'js')
+              .map((f) => f.content)
+          );
+          postToIframe(
+            {
+              type: 'HOT_PATCH_CSS',
+              overrideCss: runtimeCssText,
+              googleFontHref: buildGoogleFontsHref(usedFamilies),
+            },
+            'all'
+          );
+        }
         if (shouldRebuildAfter) {
-          postToIframe({ type: 'REMOVE_SELECTED' });
+          postToIframe({ type: 'REMOVE_SELECTED' }, 'all');
           setSelectedElement(null);
         }
         return;
@@ -987,12 +1300,19 @@ export default function App() {
           collectUsedGoogleFonts([styles['font-family']])
         );
         if (googleFontHref) {
-          postToIframe({ type: 'HOT_PATCH_CSS', googleFontHref });
+          postToIframe({ type: 'HOT_PATCH_CSS', googleFontHref }, 'all');
         }
       }
-      postToIframe({ type: 'PREVIEW_STYLE', styles });
+      if (responsiveScope !== 'all') {
+        postToIframe(
+          { type: 'PREVIEW_STYLE', styles, important: true },
+          viewportRef.current === 'all' ? activeArtboardRef.current : undefined
+        );
+      } else {
+        postToIframe({ type: 'PREVIEW_STYLE', styles }, 'all');
+      }
     },
-    [postToIframe]
+    [postToIframe, responsiveScope]
   );
 
   const handleCommitStyle = useCallback(
@@ -1002,7 +1322,7 @@ export default function App() {
           collectUsedGoogleFonts([styles['font-family']])
         );
         if (googleFontHref) {
-          postToIframe({ type: 'HOT_PATCH_CSS', googleFontHref });
+          postToIframe({ type: 'HOT_PATCH_CSS', googleFontHref }, 'all');
         }
       }
       applyPatchAndSync({ styles }, label, false);
@@ -1013,8 +1333,35 @@ export default function App() {
   // Breakpoint-specific responsive CSS commit (Desktop / Tablet / Mobile)
   const handleCommitResponsiveStyle = useCallback(
     (scope: ResponsiveScope, styles: Record<string, string | null>, label: string) => {
-      if (!selectedElement?.veId || !entryHtmlPath) {
-        showToast('Select a static HTML element to apply responsive rules');
+      if (!selectedElement) return;
+      const fontPatch = styles['font-family'];
+      const googleFontHref = fontPatch
+        ? buildGoogleFontsHref(collectUsedGoogleFonts([fontPatch]))
+        : '';
+
+      if (!selectedElement.veId || !entryHtmlPath) {
+        const sel = selectedElement.uniqueSelector || selectedElement.selectorPath;
+        if (!sel) return;
+        let nextFiles = applyRuntimeStylePatchToFiles(files, sel, styles, scope);
+        if (fontPatch && entryHtmlPath) {
+          nextFiles = nextFiles.map((file) =>
+            file.path === entryHtmlPath
+              ? { ...file, content: ensureGoogleFontInHtml(file.content, fontPatch) }
+              : file
+          );
+        }
+        setHistory((prevHistory) => pushHistoryState(prevHistory, nextFiles, label));
+        const nextOverrideCss =
+          nextFiles.find((f) => f.path === 'src/framecraft-edits.css') ??
+          nextFiles.find((f) => f.path === 'framecraft-edits.css');
+        postToIframe(
+          {
+            type: 'HOT_PATCH_CSS',
+            overrideCss: nextOverrideCss?.content ?? '',
+            ...(googleFontHref ? { googleFontHref } : {}),
+          },
+          'all'
+        );
         return;
       }
 
@@ -1030,7 +1377,10 @@ export default function App() {
       );
       if (!ensured.nodeId) return;
 
-      const updatedHtml = ensureStylesheetLinkInHtml(ensured.html, targetCssPath);
+      let updatedHtml = ensureStylesheetLinkInHtml(ensured.html, targetCssPath);
+      if (fontPatch) {
+        updatedHtml = ensureGoogleFontInHtml(updatedHtml, fontPatch);
+      }
       const existingCssFile = files.find((f) => f.path === targetCssPath);
       const nextCssContent = upsertResponsiveStylesInCss(
         existingCssFile?.content ?? '',
@@ -1058,11 +1408,19 @@ export default function App() {
       }
 
       setHistory((prevHistory) => pushHistoryState(prevHistory, nextFiles, label));
-      postToIframe({ type: 'ASSIGN_VE_NODE', nodeId: ensured.nodeId });
+      postToIframe({ type: 'ASSIGN_VE_NODE', nodeId: ensured.nodeId }, 'all');
       const managedCss = serializeResponsiveCssStore(parseResponsiveCssStore(nextCssContent));
-      postToIframe({ type: 'LIVE_CSS_OVERRIDE', cssText: managedCss });
+      postToIframe({ type: 'LIVE_CSS_OVERRIDE', cssText: managedCss }, 'all');
+      postToIframe(
+        {
+          type: 'HOT_PATCH_CSS',
+          cssSources: { [targetCssPath]: nextCssContent },
+          ...(googleFontHref ? { googleFontHref } : {}),
+        },
+        'all'
+      );
     },
-    [selectedElement, entryHtmlPath, primaryCssFile, files, postToIframe, showToast]
+    [selectedElement, entryHtmlPath, primaryCssFile, files, postToIframe]
   );
 
   const handleCommitFormattingStyle = useCallback(
@@ -1079,6 +1437,14 @@ export default function App() {
         handlePreviewStyle(previewPatch);
         handleCommitStyle(styles, label);
       } else {
+        const restoreInline: Record<string, string | null> = {};
+        for (const k of Object.keys(styles)) {
+          restoreInline[k] = selectedElement.inlineStyles[k] ?? null;
+        }
+        postToIframe(
+          { type: 'PREVIEW_STYLE', styles: restoreInline },
+          viewportRef.current === 'all' ? activeArtboardRef.current : undefined
+        );
         handleCommitResponsiveStyle(responsiveScope, styles, `${label} (${responsiveScope})`);
       }
     },
@@ -1088,6 +1454,7 @@ export default function App() {
       handlePreviewStyle,
       handleCommitStyle,
       handleCommitResponsiveStyle,
+      postToIframe,
       showToast,
     ]
   );
@@ -1095,6 +1462,18 @@ export default function App() {
   const handleToggleDeviceVisibility = useCallback(
     (device: 'desktop' | 'tablet' | 'mobile') => {
       if (!selectedElement) return;
+      if (!selectedElement.veId || !entryHtmlPath) {
+        const sel = selectedElement.uniqueSelector || selectedElement.selectorPath;
+        if (!sel) return;
+        const current = getRuntimeDeviceVisibilityFromCss(overrideCssFile?.content ?? '', sel);
+        const nextVisible = !current[device];
+        handleCommitResponsiveStyle(
+          device,
+          { display: nextVisible ? null : 'none' },
+          `${nextVisible ? 'Show' : 'Hide'} on ${device}`
+        );
+        return;
+      }
       const cssContent = primaryCssFile?.content ?? '';
       const current = getNodeDeviceVisibility(cssContent, selectedElement.veNode);
       const nextVisible = !current[device];
@@ -1104,7 +1483,7 @@ export default function App() {
         `${nextVisible ? 'Show' : 'Hide'} on ${device}`
       );
     },
-    [selectedElement, primaryCssFile, handleCommitResponsiveStyle]
+    [selectedElement, entryHtmlPath, primaryCssFile, overrideCssFile, handleCommitResponsiveStyle]
   );
 
   const handlePreviewText = useCallback(
@@ -1663,7 +2042,7 @@ export default function App() {
 
   const handleSelectParent = useCallback(() => {
     if (!selectedElement) return;
-    postToIframe({ type: 'SELECT_PARENT' });
+    postToIframe({ type: 'SELECT_PARENT' }, activeArtboardRef.current);
   }, [selectedElement, postToIframe]);
 
   const handleMoveElementSibling = useCallback(
@@ -1928,6 +2307,197 @@ export default function App() {
     [history, selectedElement, hotSyncIframe, showToast]
   );
 
+  const handleCancelAiEdit = useCallback(() => {
+    if (aiAbortControllerRef.current) {
+      aiAbortControllerRef.current.abort();
+      aiAbortControllerRef.current = null;
+    }
+    setAiLoading(false);
+  }, []);
+
+  const handleClearAiFeedback = useCallback(() => {
+    setAiError(null);
+    setAiExplanation(null);
+  }, []);
+
+  const handleRunAiElementEdit = useCallback(
+    async (rawPromptText: string, quickLabel?: string) => {
+      const trimmedPrompt = rawPromptText.trim();
+      if (!trimmedPrompt) {
+        setAiError('Describe how you want to edit the selected element.');
+        return;
+      }
+      if (trimmedPrompt.length > 1000) {
+        setAiError('Prompt must be 1,000 characters or fewer.');
+        return;
+      }
+
+      const currentSelected = selectedElementRef.current;
+      if (!currentSelected) {
+        setAiError('Select an element on the canvas before running an AI edit.');
+        return;
+      }
+
+      const currentFiles = historyRef.current.present.files;
+      const currentEntryHtmlPath = entryHtmlPathRef.current;
+      const slice = extractElementSourceSlice(currentFiles, currentEntryHtmlPath, currentSelected);
+      if (!slice) {
+        setAiError(
+          `Could not locate editable source code for <${currentSelected.tagName}>. Try selecting a more specific element.`
+        );
+        return;
+      }
+      if (slice.targetCode.length > 15000) {
+        setAiError(
+          `<${currentSelected.tagName}> is too large (${slice.targetCode.length.toLocaleString()} chars, max 15,000). Select a smaller child element.`
+        );
+        return;
+      }
+
+      if (aiAbortControllerRef.current) {
+        aiAbortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      aiAbortControllerRef.current = controller;
+
+      setAiLoading(true);
+      setAiError(null);
+      setAiExplanation(null);
+
+      const designTokens = extractDesignTokensMap(currentFiles, 60);
+
+      try {
+        const response = await fetch('/api/ai/edit-element', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            prompt: trimmedPrompt,
+            targetCode: slice.targetCode,
+            fileType: slice.fileType,
+            ...(Object.keys(designTokens).length > 0 ? { designTokens } : {}),
+            ...(slice.surroundingContext ? { surroundingContext: slice.surroundingContext } : {}),
+          }),
+        });
+
+        let payload: { updatedCode?: unknown; explanation?: unknown; error?: unknown } = {};
+        try {
+          payload = (await response.json()) as {
+            updatedCode?: unknown;
+            explanation?: unknown;
+            error?: unknown;
+          };
+        } catch {
+          payload = {};
+        }
+
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        if (!response.ok) {
+          const msg =
+            typeof payload.error === 'string' && payload.error.trim()
+              ? payload.error.trim()
+              : `AI edit request failed (${response.status}).`;
+          setAiError(msg);
+          return;
+        }
+
+        const updatedCode = typeof payload.updatedCode === 'string' ? payload.updatedCode : '';
+        const explanation =
+          typeof payload.explanation === 'string' && payload.explanation.trim()
+            ? payload.explanation.trim()
+            : `Updated <${slice.tagName}>.`;
+
+        const labelPrefix = quickLabel ? `AI: ${quickLabel}` : `AI edit <${slice.tagName}>`;
+        const committed = commitAiElementPatchWithHistory({
+          history: historyRef.current,
+          entryHtmlPath: entryHtmlPathRef.current,
+          slice,
+          updatedCode,
+          label: labelPrefix,
+        });
+
+        if (!committed.ok) {
+          setAiError(committed.error);
+          return;
+        }
+
+        const prevFiles = historyRef.current.present.files;
+        setHistory(committed.nextHistory);
+        const restoreVeId = currentSelected.veId ?? null;
+        preserveNextAiExplanationRef.current = true;
+
+        if (committed.needsPreviewRebuild) {
+          rebuildPreview(
+            committed.nextFiles,
+            editorMode,
+            restoreVeId,
+            entryHtmlPathRef.current
+          );
+        } else {
+          const didHotPatch = hotSyncIframe(
+            committed.nextFiles,
+            restoreVeId,
+            entryHtmlPathRef.current,
+            prevFiles
+          );
+          if (!didHotPatch && !restoreVeId) {
+            preserveNextAiExplanationRef.current = false;
+          }
+        }
+
+        setAiExplanation(explanation);
+        setAiPromptDraft('');
+        showToast(explanation);
+      } catch (err) {
+        if (
+          controller.signal.aborted ||
+          (err instanceof DOMException && err.name === 'AbortError')
+        ) {
+          return;
+        }
+        setAiError(
+          err instanceof Error ? err.message : 'Network error while requesting AI edit.'
+        );
+      } finally {
+        if (aiAbortControllerRef.current === controller) {
+          aiAbortControllerRef.current = null;
+          setAiLoading(false);
+        }
+      }
+    },
+    [editorMode, hotSyncIframe, rebuildPreview, showToast]
+  );
+
+  const aiCopilot = useMemo<AiElementCopilotControls>(
+    () => ({
+      prompt: aiPromptDraft,
+      loading: aiLoading,
+      error: aiError,
+      explanation: aiExplanation,
+      onChangePrompt: (next) => {
+        setAiPromptDraft(next);
+        if (aiError) setAiError(null);
+      },
+      onSubmit: (promptText, label) => {
+        void handleRunAiElementEdit(promptText, label);
+      },
+      onCancel: handleCancelAiEdit,
+      onClearFeedback: handleClearAiFeedback,
+    }),
+    [
+      aiPromptDraft,
+      aiLoading,
+      aiError,
+      aiExplanation,
+      handleRunAiElementEdit,
+      handleCancelAiEdit,
+      handleClearAiFeedback,
+    ]
+  );
+
   const handleOpenHistoryTimeline = useCallback(() => {
     setShowStartHub(false);
     if (rightSidebarCollapsed) {
@@ -2069,7 +2639,7 @@ export default function App() {
           break;
         case 'edit-text':
           if (editorMode === 'edit' && selectedElement) {
-            postToIframe({ type: 'START_INLINE_EDIT' });
+            postToIframe({ type: 'START_INLINE_EDIT' }, activeArtboardRef.current);
           }
           break;
         case 'select-parent':
@@ -2107,10 +2677,10 @@ export default function App() {
           handleStepZoom('out');
           break;
         case 'zoom-100':
-          setCanvasZoom('100');
+          handleChangeCanvasZoom('100');
           break;
         case 'zoom-fit':
-          setCanvasZoom('fit');
+          handleChangeCanvasZoom('fit');
           break;
         case 'viewport-desktop':
           handleChangeViewport('desktop');
@@ -2120,6 +2690,9 @@ export default function App() {
           break;
         case 'viewport-mobile':
           handleChangeViewport('mobile');
+          break;
+        case 'viewport-all':
+          handleChangeViewport('all');
           break;
         case 'open-shortcuts':
           setShortcutsModalOpen((prev) => !prev);
@@ -2168,6 +2741,7 @@ export default function App() {
       handleSelectParent,
       handleCommitFormattingStyle,
       handleStepZoom,
+      handleChangeCanvasZoom,
       handleChangeViewport,
       commandPaletteOpen,
       globalFindReplaceOpen,
@@ -2246,13 +2820,14 @@ export default function App() {
       setActiveFilePath(nextEntry ?? cloned[0]?.path ?? null);
       setActivePreviewHtmlPath(nextEntry);
       setSelectedElement(null);
+      resetAiCopilotState(true);
       setCenterTab('preview');
       setShowStartHub(false);
       codeDirtyRef.current = false;
       rebuildPreview(cloned, editorMode, null, nextEntry);
       showToast(`Loaded ${tpl.name}`);
     },
-    [editorMode, rebuildPreview, showToast]
+    [editorMode, rebuildPreview, resetAiCopilotState, showToast]
   );
 
   const handleResetProject = useCallback(() => {
@@ -2262,10 +2837,11 @@ export default function App() {
     setHistory(createHistoryState(cloned, 'Reset project'));
     setActivePreviewHtmlPath(nextEntry);
     setSelectedElement(null);
+    resetAiCopilotState(true);
     codeDirtyRef.current = false;
     rebuildPreview(cloned, editorMode, null, nextEntry);
     showToast('Project reset to original state');
-  }, [initialFiles, editorMode, rebuildPreview, showToast]);
+  }, [initialFiles, editorMode, rebuildPreview, resetAiCopilotState, showToast]);
 
   const handleUploadFiles = useCallback(
     async (fileList: FileList) => {
@@ -2345,6 +2921,7 @@ export default function App() {
       setActiveFilePath(nextEntry ?? normalized[0]?.path ?? null);
       setActivePreviewHtmlPath(nextEntry);
       setSelectedElement(null);
+      resetAiCopilotState(true);
       setCenterTab('preview');
       setShowStartHub(false);
       codeDirtyRef.current = false;
@@ -2357,7 +2934,7 @@ export default function App() {
         showToast(`Loaded ${normalized.length} files (${nextEntry})`);
       }
     },
-    [editorMode, rebuildPreview, showToast]
+    [editorMode, rebuildPreview, resetAiCopilotState, showToast]
   );
 
   const handleUploadImageAsset = useCallback(
@@ -2890,6 +3467,7 @@ export default function App() {
         );
         setActivePreviewHtmlPath(nextEntry);
         setSelectedElement(null);
+        resetAiCopilotState(true);
         setCenterTab('preview');
         setShowStartHub(false);
         codeDirtyRef.current = false;
@@ -2923,7 +3501,7 @@ export default function App() {
         setGithubBusyAction(null);
       }
     },
-    [editorMode, files, githubConnection.repoFullName, githubSessionToken, rebuildPreview, showToast]
+    [editorMode, files, githubConnection.repoFullName, githubSessionToken, rebuildPreview, resetAiCopilotState, showToast]
   );
 
   const handlePushToGitHub = useCallback(
@@ -3160,10 +3738,16 @@ export default function App() {
 
   const captureLiveSnapshot = useCallback(async () => {
     const defaultWidth =
-      canvasWidthPx ?? (viewport === 'mobile' ? 390 : viewport === 'tablet' ? 768 : 1280);
+      canvasWidthPx ?? (viewport === 'mobile' ? 375 : viewport === 'tablet' ? 768 : 1440);
     const defaultHeight = canvasHeightPx ?? 760;
 
-    if (centerTab === 'preview' && iframeRef.current?.contentWindow) {
+    const targetFrameWin = (
+      viewportRef.current === 'all'
+        ? artboardIframeRefs.current[activeArtboardRef.current]
+        : iframeRef.current
+    )?.contentWindow;
+
+    if (centerTab === 'preview' && targetFrameWin) {
       const requestId = `snap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const liveCapture = await new Promise<{
         cssText: string;
@@ -3182,8 +3766,8 @@ export default function App() {
           resolve(payload);
         });
 
-        iframeRef.current?.contentWindow?.postMessage(
-          { type: 'REQUEST_SNAPSHOT_HTML', requestId },
+        targetFrameWin.postMessage(
+          { target: 've-iframe', type: 'REQUEST_SNAPSHOT_HTML', requestId },
           '*'
         );
       });
@@ -3482,11 +4066,15 @@ export default function App() {
             setAutoSaveStatus((prev) => ({ ...prev, enabled: !prev.enabled }))
           }
           viewport={viewport}
+          onChangeViewport={handleChangeViewport}
+          activeArtboard={activeArtboard}
+          onSelectArtboard={handleSelectArtboard}
+          onRegisterArtboardIframe={registerArtboardIframe}
           canvasWidthPx={canvasWidthPx}
           canvasHeightPx={canvasHeightPx}
           onResizeCanvasFrame={handleResizeCanvasFrame}
           canvasZoom={canvasZoom}
-          onChangeCanvasZoom={setCanvasZoom}
+          onChangeCanvasZoom={handleChangeCanvasZoom}
           showOutlines={showOutlines}
           onToggleOutlines={handleToggleOutlines}
           activeSpacingOverlay={activeSpacingOverlay}
@@ -3522,6 +4110,7 @@ export default function App() {
           onUpdateCodeContent={handleUpdateCodeContent}
           onPostIframeMessage={postToIframe}
           onDropComponentOnCanvas={handleDropComponentOnCanvas}
+          aiCopilot={aiCopilot}
         />
 
         {rightSidebarCollapsed ? (
@@ -3530,7 +4119,9 @@ export default function App() {
               type="button"
               onClick={() => {
                 setRightSidebarCollapsed(false);
-                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+                window.requestAnimationFrame(() =>
+                  postToIframe({ type: 'REQUEST_RECT' }, activeArtboardRef.current)
+                );
               }}
               aria-label="Expand Inspector sidebar"
               title="Expand Inspector (Ctrl+I)"
@@ -3553,7 +4144,9 @@ export default function App() {
               }}
               onDoubleClick={() => {
                 setRightSidebarWidth(380);
-                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+                window.requestAnimationFrame(() =>
+                  postToIframe({ type: 'REQUEST_RECT' }, activeArtboardRef.current)
+                );
               }}
               style={{ cursor: 'col-resize' }}
               title="Drag to resize · Double-click to reset"
@@ -3563,7 +4156,9 @@ export default function App() {
               widthPx={rightSidebarWidth}
               onCollapse={() => {
                 setRightSidebarCollapsed(true);
-                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+                window.requestAnimationFrame(() =>
+                  postToIframe({ type: 'REQUEST_RECT' }, activeArtboardRef.current)
+                );
               }}
               activeTab={rightPanelTab}
               onChangeTab={setRightPanelTab}
@@ -3578,10 +4173,13 @@ export default function App() {
                 if (centerTab !== 'preview') {
                   setCenterTab('preview');
                 }
-                postToIframe({ type: 'SELECT_NODE_ID', nodeId });
+                postToIframe(
+                  { type: 'SELECT_NODE_ID', nodeId, notifyParent: true },
+                  activeArtboardRef.current
+                );
               }}
               onHoverDomNode={(nodeId) => {
-                postToIframe({ type: 'HOVER_NODE_ID', nodeId });
+                postToIframe({ type: 'HOVER_NODE_ID', nodeId }, 'all');
               }}
               onViewInCode={handleViewSelectedInCode}
               onHoverSpacing={setActiveSpacingOverlay}
@@ -3594,6 +4192,7 @@ export default function App() {
               htmlPages={htmlPages}
               primaryCssPath={primaryCssFile?.path ?? null}
               stylesCssContent={primaryCssFile?.content ?? ''}
+              overrideCssContent={overrideCssFile?.content ?? ''}
               onPreviewStyle={handlePreviewStyle}
               onCommitStyle={handleCommitStyle}
               onCommitResponsiveStyle={handleCommitResponsiveStyle}
@@ -3632,6 +4231,7 @@ export default function App() {
               onUndoHistory={handleUndo}
               onRedoHistory={handleRedo}
               onJumpToHistoryIndex={handleJumpToHistoryIndex}
+              aiCopilot={aiCopilot}
             />
           </>
         )}

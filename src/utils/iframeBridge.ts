@@ -10,6 +10,10 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     outline: 1.5px dashed #38bdf8 !important;
     outline-offset: 2px !important;
   }
+  [data-ve-selected="true"] {
+    outline: 2px solid #6366f1 !important;
+    outline-offset: -1px !important;
+  }
   [data-ve-selected="true"]:not([data-ve-editing="true"]) {
     cursor: grab !important;
   }
@@ -110,6 +114,20 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   var outlinesStyleEl = document.querySelector('style[data-ve-internal="layout-outlines"]');
   var moveDrag = null;
   var suppressNextClick = false;
+  var artboardId = (function() {
+    try {
+      if (typeof window.name === 'string' && window.name.indexOf('ve-artboard:') === 0) {
+        var namedId = window.name.slice('ve-artboard:'.length);
+        if (namedId === 'desktop' || namedId === 'tablet' || namedId === 'mobile') {
+          return namedId;
+        }
+      }
+    } catch (err) {}
+    var w = window.innerWidth || 1440;
+    if (w < 560) return 'mobile';
+    if (w < 992) return 'tablet';
+    return 'desktop';
+  })();
 
   var CONTAINER_TAGS = new Set([
     'div', 'section', 'main', 'article', 'aside', 'header', 'footer', 'nav', 'form', 'ul', 'ol', 'body'
@@ -532,15 +550,27 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   }
 
   function postToParent(type, data) {
-    window.parent.postMessage(Object.assign({ source: 've-iframe', type: type }, data), '*');
+    window.parent.postMessage(
+      Object.assign({ source: 've-iframe', artboardId: artboardId, type: type }, data || {}),
+      '*'
+    );
   }
 
-  function clearHover() {
+  function clearHover(notifyParent) {
+    var hadHovered = Boolean(hoveredEl);
     if (hoveredEl) {
       hoveredEl.removeAttribute('data-ve-hovered');
       hoveredEl = null;
     }
     if (badge) badge.style.display = 'none';
+    if (notifyParent && hadHovered) {
+      postToParent('ELEMENT_HOVERED', {
+        nodeKey: null,
+        veId: null,
+        rtId: null,
+        uniqueSelector: null
+      });
+    }
   }
 
   function clearDropTarget() {
@@ -590,6 +620,26 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     );
   }
 
+  function findNodeBySyncPayload(msg) {
+    if (!msg) return null;
+    if (msg.veId) {
+      var byVe = document.querySelector('[data-ve-id="' + msg.veId + '"]');
+      if (byVe) return byVe;
+    }
+    var targetId = msg.nodeId || msg.rtId || null;
+    if (targetId) {
+      var byId = findNodeById(targetId);
+      if (byId) return byId;
+    }
+    if (msg.uniqueSelector && typeof msg.uniqueSelector === 'string') {
+      try {
+        var bySel = document.querySelector(msg.uniqueSelector);
+        if (bySel && !isInternalEl(bySel)) return bySel;
+      } catch (err) {}
+    }
+    return null;
+  }
+
   function commitInlineEdit() {
     if (!editingEl) return;
     var target = editingEl;
@@ -625,9 +675,10 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     if (mode !== 'edit' || editingEl || (moveDrag && moveDrag.dragging)) return;
     var target = resolveEditableTarget(e.target);
     if (!target || isInternalEl(target) || target === document.body) {
-      clearHover();
+      clearHover(true);
       return;
     }
+    var changed = hoveredEl !== target;
     if (hoveredEl && hoveredEl !== target) {
       hoveredEl.removeAttribute('data-ve-hovered');
     }
@@ -636,10 +687,20 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       hoveredEl.setAttribute('data-ve-hovered', 'true');
     }
     positionBadge(hoveredEl);
+    if (changed) {
+      var hovVeId = hoveredEl.getAttribute('data-ve-id') || null;
+      var hovRtId = hovVeId ? null : getRuntimeId(hoveredEl);
+      postToParent('ELEMENT_HOVERED', {
+        nodeKey: hovVeId || hovRtId,
+        veId: hovVeId,
+        rtId: hovRtId,
+        uniqueSelector: buildUniqueCssSelector(hoveredEl)
+      });
+    }
   }, true);
 
   document.addEventListener('mouseleave', function() {
-    clearHover();
+    clearHover(true);
   }, true);
 
   document.addEventListener('mousedown', function(e) {
@@ -910,10 +971,15 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     var msg = e.data;
     if (!msg || msg.target !== 've-iframe') return;
 
+    if (msg.type === 'SET_ARTBOARD_ID' && (msg.artboardId === 'desktop' || msg.artboardId === 'tablet' || msg.artboardId === 'mobile')) {
+      artboardId = msg.artboardId;
+      return;
+    }
+
     if (msg.type === 'SET_MODE') {
       mode = msg.mode;
       if (mode !== 'edit') {
-        clearHover();
+        clearHover(false);
         clearDropTarget();
         if (editingEl) commitInlineEdit();
         if (selectedEl) {
@@ -937,20 +1003,22 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     }
 
     if (msg.type === 'SELECT_VE_ID' || msg.type === 'SELECT_NODE_ID') {
-      var targetId = msg.nodeId || msg.veId || null;
-      var found = findNodeById(targetId);
+      var found = findNodeBySyncPayload(msg);
       if (found && msg.scrollIntoView !== false && found.scrollIntoView) {
         found.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       }
-      selectElement(found, true);
-      window.requestAnimationFrame(notifyRectChange);
+      var notifySelection = msg.notifyParent !== false && msg.silent !== true;
+      selectElement(found, notifySelection);
+      if (notifySelection) {
+        window.requestAnimationFrame(notifyRectChange);
+      }
       return;
     }
 
     if (msg.type === 'HOVER_NODE_ID') {
-      clearHover();
-      if (mode === 'edit' && msg.nodeId) {
-        var hov = findNodeById(msg.nodeId);
+      clearHover(false);
+      if (mode === 'edit' && (msg.nodeId || msg.veId || msg.rtId || msg.uniqueSelector)) {
+        var hov = findNodeBySyncPayload(msg);
         if (hov && !isInternalEl(hov) && hov !== document.body) {
           hoveredEl = hov;
           if (hoveredEl !== selectedEl) {
@@ -958,6 +1026,29 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
           }
           positionBadge(hoveredEl);
         }
+      }
+      return;
+    }
+
+    if (msg.type === 'SYNC_NODE_TEXT') {
+      var textTarget = findNodeBySyncPayload(msg) || selectedEl;
+      if (textTarget && typeof msg.textContent === 'string') {
+        textTarget.textContent = msg.textContent;
+      }
+      return;
+    }
+
+    if (msg.type === 'SYNC_NODE_STYLE') {
+      var styleTarget = findNodeBySyncPayload(msg) || selectedEl;
+      if (styleTarget && msg.styles) {
+        Object.keys(msg.styles).forEach(function(prop) {
+          var val = msg.styles[prop];
+          if (val === null || val === '') {
+            styleTarget.style.removeProperty(prop);
+          } else {
+            styleTarget.style.setProperty(prop, val);
+          }
+        });
       }
       return;
     }
@@ -1065,12 +1156,13 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
     if (msg.type === 'PREVIEW_STYLE' && selectedEl) {
       var styles = msg.styles || {};
+      var priority = msg.important ? 'important' : '';
       Object.keys(styles).forEach(function(prop) {
         var val = styles[prop];
         if (val === null || val === '') {
           selectedEl.style.removeProperty(prop);
         } else {
-          selectedEl.style.setProperty(prop, val);
+          selectedEl.style.setProperty(prop, val, priority);
         }
       });
       notifyRectChange();
@@ -1218,12 +1310,28 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
       if (msg.cssSources && typeof msg.cssSources === 'object') {
         var sourceStyles = document.querySelectorAll('style[data-ve-source]');
+        var existingMap = {};
         for (var si = 0; si < sourceStyles.length; si++) {
           var srcKey = sourceStyles[si].getAttribute('data-ve-source');
+          if (srcKey) existingMap[srcKey] = sourceStyles[si];
           if (srcKey && typeof msg.cssSources[srcKey] === 'string') {
             sourceStyles[si].textContent = msg.cssSources[srcKey];
           }
         }
+        var incomingCssKeys = Object.keys(msg.cssSources);
+        for (var ici = 0; ici < incomingCssKeys.length; ici++) {
+          var ck = incomingCssKeys[ici];
+          if (!existingMap[ck] && document.head && typeof msg.cssSources[ck] === 'string') {
+            var createdStyle = document.createElement('style');
+            createdStyle.setAttribute('data-ve-source', ck);
+            createdStyle.textContent = msg.cssSources[ck];
+            document.head.appendChild(createdStyle);
+          }
+        }
+      }
+
+      if (msg.type === 'HOT_PATCH_HTML' && liveResponsiveStyleEl) {
+        liveResponsiveStyleEl.textContent = typeof msg.liveResponsiveCss === 'string' ? msg.liveResponsiveCss : '';
       }
 
       if (typeof msg.overrideCss === 'string') {
@@ -1317,14 +1425,15 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
         applyOutlinesCss();
 
         selectedEl = null;
+        var shouldNotifyRestore = !msg.primaryArtboardId || msg.primaryArtboardId === artboardId;
         if (mode === 'edit' && prevSelectedVeId) {
           var restored = findNodeById(prevSelectedVeId);
           if (restored) {
-            selectElement(restored, true);
-          } else {
+            selectElement(restored, shouldNotifyRestore);
+          } else if (shouldNotifyRestore) {
             postToParent('ELEMENT_CLEARED', {});
           }
-        } else if (prevSelectedVeId === null) {
+        } else if (prevSelectedVeId === null && shouldNotifyRestore) {
           postToParent('ELEMENT_CLEARED', {});
         }
 
