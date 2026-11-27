@@ -14,7 +14,6 @@
     "clean": "rm -rf dist server.js release",
     "lint": "tsc --noEmit",
     "test": "npx tsx --test src/utils/editorLogic.test.ts",
-    "audit": "bun audit --json && echo '--- Audit complete ---'",
     "electron:build": "npm run build && node electron/ensure-icon.cjs && electron-builder --win --x64 --publish never"
   },
   "dependencies": {

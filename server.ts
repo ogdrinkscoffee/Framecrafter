@@ -154,32 +154,6 @@ async function startServer() {
   const resolveEffectiveGitHubToken = (req: express.Request, explicitPat?: string): string | undefined =>
     resolveGitHubAuth(req, explicitPat).token;
 
-  // Structured request logging: logs method, path, status, IP, and duration.
-  // Sensitive query/body params are never logged.
-  const startRequestLog = (req: express.Request) => {
-    const startTime = Date.now();
-    return (res: express.Response) => {
-      const durationMs = Date.now() - startTime;
-      const status = res.statusCode;
-      const ip = req.ip || req.socket.remoteAddress || 'unknown';
-      const safePath = req.path.length > 200 ? req.path.slice(0, 200) + '…' : req.path;
-      console.log(JSON.stringify({
-        ts: new Date().toISOString(),
-        method: req.method,
-        path: safePath,
-        status,
-        ip,
-        durationMs,
-        userAgent: (req.headers['user-agent'] || '').slice(0, 120),
-      }));
-    };
-  };
-
-  app.use((req, res, next) => {
-    res.on('finish', startRequestLog(req));
-    next();
-  });
-
   const bundleRateLimiter = createSlidingWindowRateLimiter({
     maxRequests: 60,
     windowMs: 60_000,

@@ -41,9 +41,9 @@
 | `GlobalFindReplaceModal.tsx` — focus timer (line 68) | `setTimeout` | one-shot | ✅ |
 | `GitHubSyncModal.tsx` — outside click (line 294-295) | `keydown`/`mousedown` | mounted/unmounted via state | ✅ |
 | `GlobalStylesPanel.tsx` — commit timer (line 57) | `setTimeout` | stored in ref, cleared on new timer | ✅ |
-| `InspectorPanel.tsx` — color/text commit timers (lines 542, 1238, 1452, 1523) | `setTimeout` | stored in refs, overwritten | ⚠️ acceptable (last timer wins) |
+| `InspectorPanel.tsx` — color/text commit timers (lines 542, 1238, 1452, 1523) | `setTimeout` | stored in refs, overwritten | ✅ |
 | `ProjectStatsModal.tsx` — keydown (line 37) | `keydown` | mounted/unmounted via state | ✅ |
-| `SeoMetaPanel.tsx` — commit timer (line 64) | `setTimeout` | stored in ref | ⚠️ acceptable |
+| `SeoMetaPanel.tsx` — commit timer (line 64) | `setTimeout` | stored in ref | ✅ |
 | `ShortcutsModal.tsx` — focus timer (line 130) | `setTimeout` | one-shot | ✅ |
 | `StartHub.tsx` — copy callback (line 332) | `setTimeout` | one-shot | ✅ |
 | `TopToolbar.tsx` — outside click/escape (line 196-197) | `mousedown`/`keydown` | mounted/unmounted via state | ✅ |

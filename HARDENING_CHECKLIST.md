@@ -23,8 +23,8 @@
 | 14 | Performance budgeting | ✅ Disc | Build warnings for large chunks noted; code-splitting considered. |
 | 15 | Input sanitization audit | ✅ Disc | HTML/CSS/JSX syntax validators; server payload validators; GitHub username/URL/path validators. |
 | 16 | Security headers & CSP hardening | ✅ Done | Added `X-Permitted-Cross-Domain-Policies: none`, `X-XSS-Protection: 0` to server responses. Added same headers to OAuth callback. |
-| 17 | Dependency auditing & supply chain | ✅ Done | `bun audit` script added to package.json. Electron advisories documented. Supply chain: all deps from npm, no untrusted sources. |
-| 18 | Logging, monitoring & error tracking | ✅ Done | Structured JSON request logging middleware added (method, path, status, IP, duration, user-agent — no sensitive params). Error routes use `console.error`. |
+| 17 | Dependency auditing & supply chain | ✅ Disc | `bun audit` works out of the box; no script needed. Electron lifecycle advisories documented (desktop wrapper only). All deps from npm, no untrusted sources. |
+| 18 | Logging, monitoring & error tracking | ✅ Disc | Server routes already log errors via `console.error`. No request logging middleware added — existing error logging is sufficient for this project's scale. OAuth callback and auth routes log errors. |
 | 19 | Dev/prod environment separation | ✅ Disc | HSTS only in production over HTTPS. CSP more permissive in dev. OAuth callback HTML isolated. APP_URL controls trusted origins. |
 | 20 | Desktop/Electron security hardening | ✅ Done | Electron advisories documented (GHSA-hq2x-r82h, GHSA-gr2m-v5gq-v685, etc.). Electron is desktop wrapper only; server runs independently. No Node.js integration in renderer. |
 | 21 | Input validation & sanitization audit (frontend) | ✅ Disc | Comprehensive: syntax validators (HTML/CSS/JSX), server payload validators, GitHub validators, URL parsers with validation. No unvalidated user input paths remain. |
