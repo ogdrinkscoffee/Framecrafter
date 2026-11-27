@@ -1593,8 +1593,9 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
   syncMountedDom();
 
+  var domObserver = null;
   if (typeof MutationObserver !== 'undefined' && document.body) {
-    var domObserver = new MutationObserver(function(mutations) {
+    domObserver = new MutationObserver(function(mutations) {
       var needsTag = false;
       for (var i = 0; i < mutations.length; i++) {
         var added = mutations[i].addedNodes;
@@ -1621,6 +1622,14 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     });
     domObserver.observe(document.body, { childList: true, subtree: true });
   }
+
+  // Disconnect observers and clear timers when the iframe document is torn down,
+  // so a reused iframe (navigation without reload) does not accumulate stale listeners.
+  window.addEventListener('beforeunload', function() {
+    if (domObserver) domObserver.disconnect();
+    if (actionToastTimer) window.clearTimeout(actionToastTimer);
+    if (domTreeTimer) window.clearTimeout(domTreeTimer);
+  }, { once: true });
 })();
 </script>`;
 }
