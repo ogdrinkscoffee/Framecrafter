@@ -97,14 +97,29 @@ async function startServer() {
     return record;
   };
 
-  const resolveEffectiveGitHubToken = (req: express.Request, explicitPat?: string): string | undefined => {
-    const session = resolveGitHubSession(req);
-    if (session?.accessToken) return session.accessToken;
+  const resolveGitHubAuth = (
+    req: express.Request,
+    explicitPat?: string
+  ): { token?: string; sessionExpired: boolean } => {
+    const bearerToken = getBearerSessionToken(req);
+    if (bearerToken) {
+      const session = resolveGitHubSession(req);
+      if (session?.accessToken) {
+        return { token: session.accessToken, sessionExpired: false };
+      }
+    }
     const patHeader = req.headers['x-github-token'];
-    if (typeof patHeader === 'string' && patHeader.trim()) return patHeader.trim();
-    if (explicitPat && explicitPat.trim()) return explicitPat.trim();
-    return undefined;
+    if (typeof patHeader === 'string' && patHeader.trim()) {
+      return { token: patHeader.trim(), sessionExpired: false };
+    }
+    if (explicitPat && explicitPat.trim()) {
+      return { token: explicitPat.trim(), sessionExpired: false };
+    }
+    return { token: undefined, sessionExpired: Boolean(bearerToken) };
   };
+
+  const resolveEffectiveGitHubToken = (req: express.Request, explicitPat?: string): string | undefined =>
+    resolveGitHubAuth(req, explicitPat).token;
 
   const bundleRateLimiter = createSlidingWindowRateLimiter({
     maxRequests: 60,
@@ -584,12 +599,15 @@ async function startServer() {
   app.get('/api/github/repos', async (req, res) => {
     if (!enforceRateLimit(githubRateLimiter, req, res)) return;
     try {
-      const token = resolveEffectiveGitHubToken(req);
+      const { token, sessionExpired } = resolveGitHubAuth(req);
       if (!token) {
         res.status(401).json({
           ok: false,
           requiresAuth: true,
-          error: 'Connect your GitHub account to browse your repositories.',
+          sessionExpired,
+          error: sessionExpired
+            ? 'Your GitHub session expired (for example after a server restart). Reconnect GitHub or enter a Personal Access Token.'
+            : 'Connect your GitHub account to browse your repositories.',
         });
         return;
       }
@@ -655,7 +673,20 @@ async function startServer() {
         res.status(400).json({ ok: false, error: validated.error });
         return;
       }
-      const effectiveToken = resolveEffectiveGitHubToken(req, validated.data.token);
+      const { token: effectiveToken, sessionExpired } = resolveGitHubAuth(
+        req,
+        validated.data.token
+      );
+      if (!effectiveToken && sessionExpired) {
+        res.status(401).json({
+          ok: false,
+          requiresAuth: true,
+          sessionExpired: true,
+          error:
+            'Your GitHub session expired (for example after a server restart). Reconnect GitHub or paste a Personal Access Token to push commits.',
+        });
+        return;
+      }
       const result = await pushToGitHubRepo({
         ...validated.data,
         token: effectiveToken,

@@ -250,6 +250,7 @@ export const GitHubSyncPopover: React.FC<GitHubSyncPopoverProps> = ({
   const [branchDraft, setBranchDraft] = useState(connection.branch);
   const [commitMessageDraft, setCommitMessageDraft] = useState('Update project from Framecraft');
   const [showAuthSection, setShowAuthSection] = useState(false);
+  const [showConnectedAuthPanel, setShowConnectedAuthPanel] = useState(false);
   const [showPatFallback, setShowPatFallback] = useState(false);
   const [showOAuthSetup, setShowOAuthSetup] = useState(false);
   const [copiedCallback, setCopiedCallback] = useState(false);
@@ -271,6 +272,7 @@ export const GitHubSyncPopover: React.FC<GitHubSyncPopoverProps> = ({
   useEffect(() => {
     if (requiresAuthPrompt) {
       setShowAuthSection(true);
+      setShowConnectedAuthPanel(true);
     }
   }, [requiresAuthPrompt]);
 
@@ -807,6 +809,86 @@ export const GitHubSyncPopover: React.FC<GitHubSyncPopoverProps> = ({
                   </div>
                 )}
 
+                {/* Write-Access / Token Prompt when browsing public repos read-only or after auth error */}
+                {(githubAccountReadOnly || requiresAuthPrompt) && (
+                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/8 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setShowConnectedAuthPanel((prev) => !prev)}
+                      className="w-full px-3 py-2 flex items-center justify-between gap-2 text-left text-[11px] font-medium text-amber-800 dark:text-amber-200 hover:bg-amber-500/10 transition-colors cursor-pointer"
+                    >
+                      <span className="inline-flex items-center gap-1.5 min-w-0">
+                        <Lock className="w-3.5 h-3.5 shrink-0" strokeWidth={1.6} />
+                        <span className="truncate">
+                          {githubAccountReadOnly
+                            ? 'Read-only public view — authorize to push commits'
+                            : 'Reconnect GitHub or update Personal Access Token'}
+                        </span>
+                      </span>
+                      {showConnectedAuthPanel || requiresAuthPrompt ? (
+                        <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5 shrink-0" />
+                      )}
+                    </button>
+
+                    {(showConnectedAuthPanel || requiresAuthPrompt) && (
+                      <div className="px-3 pb-3 pt-2 space-y-2 border-t border-amber-500/20">
+                        {githubOAuthConfigured === true && (
+                          <button
+                            type="button"
+                            disabled={githubConnecting || githubReposLoading}
+                            onClick={() => void onConnectGitHub()}
+                            className="w-full h-8 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-[11.5px] font-semibold inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            {githubConnecting ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <GitBranch className="w-3.5 h-3.5" />
+                            )}
+                            {githubConnecting ? 'Authorizing with GitHub...' : 'Connect GitHub Account'}
+                          </button>
+                        )}
+                        <div className="flex items-center justify-between gap-2 text-[10.5px] text-[var(--studio-muted)]">
+                          <span>Personal Access Token (repo write scope)</span>
+                          <a
+                            href="https://github.com/settings/tokens/new?description=Framecraft+Studio&scopes=repo,read:user"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 font-medium text-indigo-500 dark:text-indigo-400 hover:underline shrink-0"
+                          >
+                            <span>Get token</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="password"
+                            value={token}
+                            onChange={(e) => onChangeToken(e.target.value)}
+                            placeholder="ghp_... or github_pat_..."
+                            aria-label="GitHub Personal Access Token for pushing"
+                            autoComplete="off"
+                            className="flex-1 min-w-0 h-7 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border)] px-2.5 text-[11.5px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500"
+                          />
+                          <button
+                            type="button"
+                            disabled={!token.trim() || githubReposLoading}
+                            onClick={() => void onRefreshGitHubRepos(token)}
+                            className="h-7 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-45 text-white text-[11px] font-semibold shrink-0 cursor-pointer"
+                          >
+                            {githubReposLoading ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              'Verify'
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Actions */}
                 <div className="grid grid-cols-2 gap-2">
                   <button
@@ -1039,9 +1121,12 @@ export interface GitHubCommitModalProps {
   statusMessage: string | null;
   requiresAuthPrompt: boolean;
   githubUser?: GitHubUserProfile | null;
+  githubAccountReadOnly?: boolean;
   githubRepos?: GitHubRepoSummary[];
   githubConnecting?: boolean;
+  githubOAuthConfigured?: boolean | null;
   onConnectGitHub?: () => Promise<void>;
+  onRefreshGitHubRepos?: (overridePatToken?: string) => Promise<void>;
   onFetchRepoBranches?: (owner: string, repo: string) => Promise<string[]>;
   onSwitchBranch?: (branch: string) => void;
   onPullFromGitHub: (repoUrl: string, branch: string, token: string) => Promise<void>;
@@ -1064,9 +1149,12 @@ export const GitHubCommitModal: React.FC<GitHubCommitModalProps> = ({
   statusMessage,
   requiresAuthPrompt,
   githubUser,
+  githubAccountReadOnly = false,
   githubRepos = [],
   githubConnecting = false,
+  githubOAuthConfigured = null,
   onConnectGitHub,
+  onRefreshGitHubRepos,
   onFetchRepoBranches,
   onSwitchBranch,
   onPullFromGitHub,
@@ -1087,10 +1175,10 @@ export const GitHubCommitModal: React.FC<GitHubCommitModalProps> = ({
   }, [open, connection.repoUrl, connection.branch]);
 
   useEffect(() => {
-    if (requiresAuthPrompt) {
+    if (requiresAuthPrompt || githubAccountReadOnly) {
       setShowTokenField(true);
     }
-  }, [requiresAuthPrompt]);
+  }, [requiresAuthPrompt, githubAccountReadOnly]);
 
   useEffect(() => {
     if (!open) return;
@@ -1311,14 +1399,19 @@ export const GitHubCommitModal: React.FC<GitHubCommitModalProps> = ({
           </div>
 
           {/* Auth Status or Optional PAT */}
-          {githubUser ? (
+          {githubUser && !githubAccountReadOnly && !requiresAuthPrompt ? (
             <div className="flex items-center justify-between px-3 py-2 rounded-xl border border-emerald-500/25 bg-emerald-500/10 text-[11.5px] text-emerald-700 dark:text-emerald-300">
               <span>Authorized via GitHub as @{githubUser.login}</span>
               <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
             </div>
           ) : (
             <div className="space-y-2">
-              {onConnectGitHub && (
+              {githubUser && githubAccountReadOnly && (
+                <div className="px-3 py-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-[11px] text-amber-800 dark:text-amber-200">
+                  Browsing @{githubUser.login} in public read-only mode — sign in or paste a token to push.
+                </div>
+              )}
+              {onConnectGitHub && githubOAuthConfigured === true && (
                 <button
                   type="button"
                   disabled={githubConnecting}
@@ -1341,7 +1434,7 @@ export const GitHubCommitModal: React.FC<GitHubCommitModalProps> = ({
                 >
                   <span className="inline-flex items-center gap-1.5">
                     <Lock className="w-3.5 h-3.5 text-[var(--studio-muted)]" strokeWidth={1.5} />
-                    Or use Personal Access Token {token.trim() ? '(set)' : ''}
+                    Personal Access Token {token.trim() ? '(set)' : ''}
                   </span>
                   {showTokenField ? (
                     <ChevronDown className="w-3.5 h-3.5 text-[var(--studio-muted)]" />
@@ -1350,17 +1443,41 @@ export const GitHubCommitModal: React.FC<GitHubCommitModalProps> = ({
                   )}
                 </button>
                 {showTokenField && (
-                  <div className="px-3 pb-2.5 pt-1.5 border-t border-[var(--studio-border-subtle)] space-y-1">
-                    <input
-                      id="github-commit-pat-input"
-                      type="password"
-                      aria-label="GitHub Access Token"
-                      value={token}
-                      onChange={(e) => onChangeToken(e.target.value)}
-                      placeholder="ghp_... or github_pat_..."
-                      autoComplete="off"
-                      className="w-full rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border)] px-2.5 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
-                    />
+                  <div className="px-3 pb-2.5 pt-1.5 border-t border-[var(--studio-border-subtle)] space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 text-[10.5px] text-[var(--studio-muted)]">
+                      <span>Requires repo / Contents write access</span>
+                      <a
+                        href="https://github.com/settings/tokens/new?description=Framecraft+Studio&scopes=repo,read:user"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 font-medium text-indigo-500 dark:text-indigo-400 hover:underline shrink-0"
+                      >
+                        <span>Get token</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        id="github-commit-pat-input"
+                        type="password"
+                        aria-label="GitHub Access Token"
+                        value={token}
+                        onChange={(e) => onChangeToken(e.target.value)}
+                        placeholder="ghp_... or github_pat_..."
+                        autoComplete="off"
+                        className="flex-1 min-w-0 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border)] px-2.5 py-1.5 text-[12px] font-mono-tabular text-[var(--studio-text-strong)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60"
+                      />
+                      {onRefreshGitHubRepos && (
+                        <button
+                          type="button"
+                          disabled={!token.trim()}
+                          onClick={() => void onRefreshGitHubRepos(token)}
+                          className="h-8 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-45 text-white text-[11px] font-semibold shrink-0 cursor-pointer"
+                        >
+                          Verify
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

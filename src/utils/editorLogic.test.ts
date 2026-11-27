@@ -28,10 +28,17 @@ import {
 } from './htmlSync';
 import {
   createHistoryState,
+  getHistoryTimeline,
+  jumpToHistoryIndex,
   pushHistoryState,
   redoHistoryState,
   undoHistoryState,
 } from './historyManager';
+import {
+  buildProjectExportJson,
+  buildSvgSnapshotDocument,
+  extractBodyAndStylesFromHtml,
+} from './exportProject';
 import {
   buildProjectAssetUrlMap,
   buildSrcDoc,
@@ -70,7 +77,13 @@ import {
 } from './reactVisualSync';
 import { SAMPLE_TEMPLATES } from './sampleTemplates';
 import { searchProjectFiles } from './fileSearch';
-import { DRAGGABLE_COMPONENTS, SVG_SHAPE_TOOL_ITEMS } from './componentCatalog';
+import {
+  COMPONENT_LIBRARY_ITEMS,
+  DRAGGABLE_COMPONENTS,
+  SVG_SHAPE_TOOL_ITEMS,
+} from './componentCatalog';
+import { computeProjectStatistics } from './projectStats';
+import { replaceAcrossProjectFiles, searchAllProjectFiles } from './globalFindReplace';
 import {
   getNodeDeviceVisibility,
   getResponsiveNodeStyles,
@@ -111,7 +124,11 @@ import {
   sanitizePkceChallenge,
   verifyPkceS256,
 } from '../../serverOAuth';
-import { listPublicGitHubReposByUsername } from '../../serverGithub';
+import {
+  listPublicGitHubReposByUsername,
+  pushToGitHubRepo,
+  sanitizeGitHubToken,
+} from '../../serverGithub';
 import type { SelectedElementInfo } from '../types/editor';
 
 test('scanHtmlElements indexes body elements and skips head/script/style', () => {
@@ -1611,3 +1628,272 @@ test('buildIframeBridgeMarkup skips internal overlay siblings when computing uni
   assert.ok(bridge.includes('justifyContent'));
   assert.ok(bridge.includes('gridTemplateColumns'));
 });
+
+test('sanitizeGitHubToken strips accidental Bearer prefixes/quotes and pushToGitHubRepo prompts auth cleanly without raw Bad credentials', async () => {
+  assert.equal(sanitizeGitHubToken('  "Bearer ghp_abc123"  '), 'ghp_abc123');
+  assert.equal(sanitizeGitHubToken("  token github_pat_xyz  "), 'github_pat_xyz');
+  assert.equal(sanitizeGitHubToken('   '), '');
+
+  const prevEnvToken = process.env.GITHUB_TOKEN;
+  delete process.env.GITHUB_TOKEN;
+  try {
+    const res = await pushToGitHubRepo({
+      repoUrl: 'ogdrinkscoffee/Grandmaster-Studio',
+      branch: 'main',
+      token: '',
+      files: [{ path: 'index.html', name: 'index.html', type: 'html', content: '<h1>Hi</h1>' }],
+    });
+    assert.equal(res.ok, false);
+    assert.equal(res.requiresAuth, true);
+    assert.ok(res.error && !res.error.includes('Bad credentials'));
+  } finally {
+    if (prevEnvToken !== undefined) {
+      process.env.GITHUB_TOKEN = prevEnvToken;
+    }
+  }
+});
+
+test('computeProjectStatistics aggregates total files, LOC (excluding binary data URLs), and HTML/CSS/JS distribution', () => {
+  const emptyStats = computeProjectStatistics([]);
+  assert.equal(emptyStats.totalFiles, 0);
+  assert.equal(emptyStats.totalLinesOfCode, 0);
+  assert.equal(emptyStats.distribution.length, 3);
+
+  const stats = computeProjectStatistics([
+    { path: 'index.html', name: 'index.html', type: 'html', content: '<html>\n<body>\n<h1>Hi</h1>\n</body>\n</html>' },
+    { path: 'styles.css', name: 'styles.css', type: 'css', content: 'body {\n  color: #111;\n}' },
+    { path: 'src/app.js', name: 'app.js', type: 'js', content: 'console.log(1);\nconsole.log(2);' },
+    { path: 'assets/logo.png', name: 'logo.png', type: 'other', content: 'data:image/png;base64,AAA\nBBB' },
+  ]);
+
+  assert.equal(stats.totalFiles, 4);
+  assert.equal(stats.codeFileCount, 3);
+  assert.equal(stats.assetFileCount, 1);
+  assert.equal(stats.totalLinesOfCode, 10);
+
+  const htmlBucket = stats.distribution.find((d) => d.key === 'html')!;
+  const cssBucket = stats.distribution.find((d) => d.key === 'css')!;
+  const jsBucket = stats.distribution.find((d) => d.key === 'js')!;
+  assert.equal(htmlBucket.fileCount, 1);
+  assert.equal(htmlBucket.lineCount, 5);
+  assert.equal(htmlBucket.linePercent, 50);
+  assert.equal(cssBucket.lineCount, 3);
+  assert.equal(cssBucket.linePercent, 30);
+  assert.equal(jsBucket.lineCount, 2);
+  assert.equal(jsBucket.linePercent, 20);
+  assert.equal(stats.largestFiles[0].path, 'index.html');
+});
+
+test('COMPONENT_LIBRARY_ITEMS exposes pre-styled heroes, cards, buttons, and forms with safe preview HTML', () => {
+  assert.equal(DRAGGABLE_COMPONENTS[0].id, 'primary-button');
+  const groups = new Set(COMPONENT_LIBRARY_ITEMS.map((item) => item.libraryGroup));
+  assert.ok(groups.has('Heroes'));
+  assert.ok(groups.has('Cards'));
+  assert.ok(groups.has('Buttons'));
+  assert.ok(groups.has('Navigation'));
+  assert.ok(groups.has('Forms'));
+  for (const item of COMPONENT_LIBRARY_ITEMS) {
+    assert.ok(item.html.trim().startsWith('<'), `${item.id} should contain HTML markup`);
+  }
+});
+
+test('globalFindReplace searches across project files, skips binary data URLs, and performs literal or regex bulk replacement', () => {
+  const sampleFiles = [
+    { path: 'index.html', name: 'index.html', type: 'html' as const, content: '<h1>Acme Studio</h1>\n<p>Acme is ready. AcmeApp stays.</p>' },
+    { path: 'styles.css', name: 'styles.css', type: 'css' as const, content: '/* Acme theme */\n.acme-btn { color: red; }' },
+    { path: 'app.js', name: 'app.js', type: 'js' as const, content: 'const brand = "Acme";\nconsole.log("acme");' },
+    { path: 'img.png', name: 'img.png', type: 'other' as const, content: 'data:image/png;base64,AcmeAAA' },
+  ];
+
+  const wholeWordSearch = searchAllProjectFiles(sampleFiles, 'Acme', {
+    matchCase: true,
+    wholeWord: true,
+    useRegex: false,
+    scope: 'all',
+  });
+  assert.equal(wholeWordSearch.error, null);
+  assert.equal(wholeWordSearch.totalFilesMatched, 3);
+  assert.equal(wholeWordSearch.totalMatches, 4);
+
+  const cssOnly = searchAllProjectFiles(sampleFiles, 'acme', {
+    matchCase: false,
+    wholeWord: false,
+    useRegex: false,
+    scope: 'css',
+  });
+  assert.equal(cssOnly.totalFilesMatched, 1);
+  assert.equal(cssOnly.totalMatches, 2);
+
+  // Literal bulk replacement across selected subset preserves literal $&
+  const subsetReplace = replaceAcrossProjectFiles(
+    sampleFiles,
+    'Acme',
+    'Nova $&',
+    { matchCase: true, wholeWord: true, useRegex: false, scope: 'all' },
+    new Set(['index.html'])
+  );
+  assert.equal(subsetReplace.replacedCount, 2);
+  assert.deepEqual(subsetReplace.modifiedFilePaths, ['index.html']);
+  assert.ok(subsetReplace.files[0].content.includes('<h1>Nova $& Studio</h1>'));
+  assert.ok(subsetReplace.files[0].content.includes('AcmeApp stays.'));
+  assert.equal(subsetReplace.files[1].content, sampleFiles[1].content);
+  assert.equal(subsetReplace.files[3].content, sampleFiles[3].content);
+
+  // Regex capture replacement
+  const regexReplace = replaceAcrossProjectFiles(
+    sampleFiles,
+    'brand = "([A-Za-z]+)"',
+    'brand = "V2-$1"',
+    { matchCase: false, wholeWord: false, useRegex: true, scope: 'js' }
+  );
+  assert.equal(regexReplace.replacedCount, 1);
+  assert.ok(regexReplace.files[2].content.includes('brand = "V2-Acme"'));
+
+  // Invalid regex reports error safely
+  const badRegex = searchAllProjectFiles(sampleFiles, '[unclosed', {
+    matchCase: false,
+    wholeWord: false,
+    useRegex: true,
+  });
+  assert.ok(badRegex.error);
+});
+
+test('matchShortcutAction triggers interactive shortcuts overlay on Shift+? and global find/replace on Ctrl+Shift+F', () => {
+  const ctx = {
+    editorMode: 'edit' as const,
+    hasSelectedElement: false,
+    hasOpenModal: false,
+    isTyping: false,
+  };
+  assert.equal(
+    matchShortcutAction(
+      { key: '?', code: 'Slash', ctrlKey: false, metaKey: false, shiftKey: true, altKey: false },
+      ctx
+    ),
+    'open-shortcuts'
+  );
+  assert.equal(
+    matchShortcutAction(
+      { key: '/', code: 'Slash', ctrlKey: false, metaKey: false, shiftKey: true, altKey: false },
+      ctx
+    ),
+    'open-shortcuts'
+  );
+  assert.equal(
+    matchShortcutAction(
+      { key: 'F', code: 'KeyF', ctrlKey: true, metaKey: false, shiftKey: true, altKey: false },
+      ctx
+    ),
+    'global-find-replace'
+  );
+});
+
+test('historyManager timeline lists past/present/future entries and jumps non-sequentially', () => {
+  const f0 = [{ path: 'index.html', name: 'index.html', type: 'html' as const, content: '<h1>v0</h1>' }];
+  const f1 = [{ path: 'index.html', name: 'index.html', type: 'html' as const, content: '<h1>v1</h1>' }];
+  const f2 = [{ path: 'index.html', name: 'index.html', type: 'html' as const, content: '<h1>v2</h1>' }];
+  const f3 = [
+    { path: 'index.html', name: 'index.html', type: 'html' as const, content: '<h1>v3</h1>' },
+    { path: 'styles.css', name: 'styles.css', type: 'css' as const, content: 'body { color: #111; }' },
+  ];
+
+  let state = createHistoryState(f0, 'Initial');
+  state = pushHistoryState(state, f1, 'Step 1');
+  state = pushHistoryState(state, f2, 'Step 2');
+  state = pushHistoryState(state, f3, 'Step 3');
+
+  const fullTimeline = getHistoryTimeline(state);
+  assert.equal(fullTimeline.length, 4);
+  assert.deepEqual(
+    fullTimeline.map((e) => [e.index, e.snapshot.label, e.status, e.changedFileCount]),
+    [
+      [0, 'Initial', 'past', 1],
+      [1, 'Step 1', 'past', 1],
+      [2, 'Step 2', 'past', 1],
+      [3, 'Step 3', 'present', 2],
+    ]
+  );
+
+  // Jump backward directly to Step 1 (index 1)
+  state = jumpToHistoryIndex(state, 1);
+  assert.equal(state.present.label, 'Step 1');
+  assert.equal(state.past.length, 1);
+  assert.equal(state.future.length, 2);
+
+  const afterBackJump = getHistoryTimeline(state);
+  assert.deepEqual(
+    afterBackJump.map((e) => e.status),
+    ['past', 'present', 'future', 'future']
+  );
+
+  // Jump forward directly to Step 3 (index 3)
+  state = jumpToHistoryIndex(state, 3);
+  assert.equal(state.present.label, 'Step 3');
+  assert.equal(state.past.length, 3);
+  assert.equal(state.future.length, 0);
+
+  // Out-of-bounds or current index should be a strict no-op
+  assert.equal(jumpToHistoryIndex(state, 3), state);
+  assert.equal(jumpToHistoryIndex(state, -1), state);
+  assert.equal(jumpToHistoryIndex(state, 99), state);
+});
+
+test('exportProject builds structured JSON and sanitizes SVG/XHTML snapshot documents without script/link taint', () => {
+  const files = [
+    {
+      path: 'index.html',
+      name: 'index.html',
+      type: 'html' as const,
+      content:
+        '<!doctype html><html><head><link rel="stylesheet" href="https://cdn.example.com/x.css" /><style>h1 { color: #4f46e5; }</style></head><body><h1>Hello & Welcome</h1><img src="hero.png"><script>alert(1)</script></body></html>',
+    },
+    {
+      path: 'styles.css',
+      name: 'styles.css',
+      type: 'css' as const,
+      content: 'body { margin: 0; }',
+    },
+  ];
+
+  const jsonPayload = buildProjectExportJson({
+    projectName: 'Demo Studio',
+    entryHtmlPath: 'index.html',
+    viewport: 'desktop',
+    files,
+  });
+  assert.equal(jsonPayload.format, 'framecraft-project-v1');
+  assert.equal(jsonPayload.projectName, 'Demo Studio');
+  assert.equal(jsonPayload.summary.totalFiles, 2);
+  assert.equal(jsonPayload.files.length, 2);
+
+  const extracted = extractBodyAndStylesFromHtml(files[0].content);
+  assert.ok(extracted.cssText.includes('h1 { color: #4f46e5; }'));
+  assert.ok(extracted.bodyHtml.includes('<h1>Hello & Welcome</h1>'));
+
+  const svgDoc = buildSvgSnapshotDocument({
+    cssText: extracted.cssText,
+    bodyHtml: extracted.bodyHtml,
+    width: 1280,
+    height: 720,
+    bodyBg: '#09090b',
+    title: 'Demo & Snapshot',
+  });
+  assert.ok(svgDoc.includes('<title>Demo &amp; Snapshot</title>'));
+  assert.ok(svgDoc.includes('<foreignObject x="0" y="0" width="1280" height="720">'));
+  assert.ok(!svgDoc.includes('<script'));
+  assert.ok(!svgDoc.includes('<link'));
+  assert.ok(svgDoc.includes('<img src="hero.png" />') || svgDoc.includes('hero.png'));
+  assert.ok(svgDoc.includes('Hello &amp; Welcome'));
+
+  const bridgeMarkup = buildIframeBridgeMarkup('edit', null);
+  assert.ok(bridgeMarkup.includes('REQUEST_SNAPSHOT_HTML'));
+  assert.ok(bridgeMarkup.includes('SNAPSHOT_HTML_RESPONSE'));
+  const start = bridgeMarkup.indexOf('<script data-ve-internal="bridge-script">');
+  const end = bridgeMarkup.lastIndexOf('</script>');
+  const jsBody = bridgeMarkup.slice(
+    start + '<script data-ve-internal="bridge-script">'.length,
+    end
+  );
+  assert.doesNotThrow(() => new Function(jsBody));
+});
+

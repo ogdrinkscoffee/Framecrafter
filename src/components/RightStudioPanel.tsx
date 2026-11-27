@@ -1,8 +1,9 @@
 import React from 'react';
-import { PanelRightClose } from 'lucide-react';
+import { History, PanelRightClose } from 'lucide-react';
 import type {
   DomTreeNode,
   DraggableComponentDef,
+  HistoryState,
   ProjectFile,
   ResponsiveScope,
   RightPanelTab,
@@ -11,6 +12,7 @@ import type {
 } from '../types/editor';
 import { ElementsPalette } from './ElementsPalette';
 import { GlobalStylesPanel } from './GlobalStylesPanel';
+import { HistoryTimelinePanel } from './HistoryTimelinePanel';
 import { InspectorPanel } from './InspectorPanel';
 import { SeoMetaPanel } from './SeoMetaPanel';
 import type { SvgShapeHtmlPatch } from '../utils/htmlSync';
@@ -74,6 +76,10 @@ interface RightStudioPanelProps {
   onPreviewRootVar: (name: string, value: string) => void;
   onCommitRootVar: (name: string, value: string, label: string) => void;
   onDeleteRootVar: (name: string) => void;
+  history: HistoryState;
+  onUndoHistory: () => void;
+  onRedoHistory: () => void;
+  onJumpToHistoryIndex: (index: number) => void;
 }
 
 const STUDIO_PANEL_TABS: Array<{
@@ -107,6 +113,16 @@ const STUDIO_PANEL_TABS: Array<{
     label: 'Global Styles',
     renderIcon: (active) => (
       <DuotonePaletteIcon className={`w-3.5 h-3.5 ${active ? 'text-indigo-500 dark:text-indigo-400' : ''}`} />
+    ),
+  },
+  {
+    id: 'history',
+    label: 'History',
+    renderIcon: (active) => (
+      <History
+        className={`w-3.5 h-3.5 ${active ? 'text-indigo-500 dark:text-indigo-400' : ''}`}
+        strokeWidth={1.6}
+      />
     ),
   },
 ];
@@ -159,6 +175,10 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
   onPreviewRootVar,
   onCommitRootVar,
   onDeleteRootVar,
+  history,
+  onUndoHistory,
+  onRedoHistory,
+  onJumpToHistoryIndex,
 }) => {
   return (
     <aside
@@ -271,6 +291,15 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
           onPreviewRootVar={onPreviewRootVar}
           onCommitRootVar={onCommitRootVar}
           onDeleteRootVar={onDeleteRootVar}
+        />
+      )}
+
+      {activeTab === 'history' && (
+        <HistoryTimelinePanel
+          history={history}
+          onUndo={onUndoHistory}
+          onRedo={onRedoHistory}
+          onJumpToIndex={onJumpToHistoryIndex}
         />
       )}
     </aside>

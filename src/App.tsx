@@ -1,8 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PanelLeftOpen, PanelRightOpen } from 'lucide-react';
+import { Blocks, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { CanvasWorkspace } from './components/CanvasWorkspace';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
+import { ComponentLibraryDrawer } from './components/ComponentLibraryDrawer';
 import { FileExplorer } from './components/FileExplorer';
+import { GlobalFindReplaceModal } from './components/GlobalFindReplaceModal';
+import { ProjectStatsModal } from './components/ProjectStatsModal';
 import { RightStudioPanel } from './components/RightStudioPanel';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { StartHub } from './components/StartHub';
@@ -27,7 +30,14 @@ import type {
 import { findElementSourceLocation, insertQuickComponentInProject } from './utils/codeSync';
 import { DRAGGABLE_COMPONENTS } from './utils/componentCatalog';
 import { deleteRootCssVariable, updateRootCssVariable } from './utils/cssVariables';
-import { exportProjectAsZip, exportSingleFile } from './utils/exportProject';
+import {
+  exportPngSnapshot,
+  exportProjectAsJson,
+  exportProjectAsZip,
+  exportSingleFile,
+  exportSvgSnapshot,
+  extractBodyAndStylesFromHtml,
+} from './utils/exportProject';
 import {
   clearWorkspaceStorage,
   type FileSystemDirectoryHandleLike,
@@ -46,6 +56,10 @@ import {
   ensureGoogleFontInHtml,
 } from './utils/fontLibrary';
 import {
+  type FindReplaceScopeFilter,
+  replaceAcrossProjectFiles,
+} from './utils/globalFindReplace';
+import {
   computeFilesFingerprint,
   type GitHubAuthStatusResponse,
   type GitHubBranchesResponse,
@@ -58,6 +72,7 @@ import {
 import {
   cloneProjectFiles,
   createHistoryState,
+  jumpToHistoryIndex,
   pushHistoryState,
   redoHistoryState,
   undoHistoryState,
@@ -218,6 +233,9 @@ export default function App() {
   const [domTree, setDomTree] = useState<DomTreeNode[]>([]);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [statsModalOpen, setStatsModalOpen] = useState(false);
+  const [globalFindReplaceOpen, setGlobalFindReplaceOpen] = useState(false);
+  const [componentLibraryOpen, setComponentLibraryOpen] = useState(false);
   const [showStartHub, setShowStartHub] = useState<boolean>(() => {
     try {
       return new URLSearchParams(window.location.search).get('autostart') !== '1';
@@ -278,6 +296,18 @@ export default function App() {
     targetVeId: string | null;
     placement: 'inside' | 'after';
   }>({ targetVeId: null, placement: 'inside' });
+  const pendingSnapshotRef = useRef<
+    Map<
+      string,
+      (payload: {
+        cssText: string;
+        bodyHtml: string;
+        width: number;
+        height: number;
+        bodyBg: string;
+      }) => void
+    >
+  >(new Map());
 
   const files = history.present.files;
   const htmlPages = useMemo(
@@ -680,7 +710,12 @@ export default function App() {
             editorMode,
             hasSelectedElement: Boolean(selectedElement),
             hasOpenModal:
-              shortcutsModalOpen || githubCommitModalOpen || commandPaletteOpen || showStartHub,
+              shortcutsModalOpen ||
+              githubCommitModalOpen ||
+              commandPaletteOpen ||
+              statsModalOpen ||
+              globalFindReplaceOpen ||
+              showStartHub,
             isTyping: false,
           }
         );
@@ -702,6 +737,21 @@ export default function App() {
 
       if (data.type === 'NAVIGATE_PAGE' && typeof data.page === 'string') {
         handleSwitchPreviewPage(data.page);
+        return;
+      }
+
+      if (data.type === 'SNAPSHOT_HTML_RESPONSE' && typeof data.requestId === 'string') {
+        const resolver = pendingSnapshotRef.current.get(data.requestId);
+        if (resolver) {
+          pendingSnapshotRef.current.delete(data.requestId);
+          resolver({
+            cssText: typeof data.cssText === 'string' ? data.cssText : '',
+            bodyHtml: typeof data.bodyHtml === 'string' ? data.bodyHtml : '',
+            width: typeof data.width === 'number' ? data.width : 1280,
+            height: typeof data.height === 'number' ? data.height : 720,
+            bodyBg: typeof data.bodyBg === 'string' ? data.bodyBg : '#ffffff',
+          });
+        }
         return;
       }
 
@@ -1527,6 +1577,60 @@ export default function App() {
     [entryHtmlPath, activeHtmlFile, files, selectedElement?.veId, hotSyncIframe, showToast]
   );
 
+  const handleGlobalBulkReplace = useCallback(
+    (params: {
+      query: string;
+      replacement: string;
+      matchCase: boolean;
+      wholeWord: boolean;
+      useRegex: boolean;
+      scope: FindReplaceScopeFilter;
+      targetPaths?: Set<string>;
+    }) => {
+      const result = replaceAcrossProjectFiles(
+        files,
+        params.query,
+        params.replacement,
+        {
+          matchCase: params.matchCase,
+          wholeWord: params.wholeWord,
+          useRegex: params.useRegex,
+          scope: params.scope,
+        },
+        params.targetPaths
+      );
+
+      if (result.error || result.replacedCount === 0) {
+        if (result.error) showToast(`Replace failed: ${result.error}`);
+        return {
+          replacedCount: result.replacedCount,
+          modifiedFilePaths: result.modifiedFilePaths,
+          error: result.error,
+        };
+      }
+
+      setHistory((prev) =>
+        pushHistoryState(
+          prev,
+          result.files,
+          `Global Replace "${params.query}" (${result.replacedCount})`
+        )
+      );
+      if (entryHtmlPath) {
+        rebuildPreview(result.files, editorMode, selectedElement?.veId ?? null, entryHtmlPath);
+      }
+      showToast(
+        `Replaced ${result.replacedCount} occurrence${result.replacedCount === 1 ? '' : 's'} across ${result.modifiedFilePaths.length} file${result.modifiedFilePaths.length === 1 ? '' : 's'}`
+      );
+      return {
+        replacedCount: result.replacedCount,
+        modifiedFilePaths: result.modifiedFilePaths,
+        error: null,
+      };
+    },
+    [files, entryHtmlPath, editorMode, selectedElement?.veId, rebuildPreview, showToast]
+  );
+
   // Grant read/write folder permission via File System Access API
   const handleConnectDiskFolder = useCallback(async () => {
     const result = await requestWritableDirectoryHandle();
@@ -1804,6 +1908,35 @@ export default function App() {
     showToast(`Redid: ${nextState.present.label}`);
   }, [history, selectedElement, hotSyncIframe, showToast]);
 
+  const handleJumpToHistoryIndex = useCallback(
+    (targetIndex: number) => {
+      const nextState = jumpToHistoryIndex(history, targetIndex);
+      if (nextState === history) return;
+      setHistory(nextState);
+      const keepVeId = selectedElement?.veId ?? null;
+      const didHotPatch = hotSyncIframe(
+        nextState.present.files,
+        keepVeId,
+        undefined,
+        history.present.files
+      );
+      if (!didHotPatch) {
+        setSelectedElement(null);
+      }
+      showToast(`Jumped to: ${nextState.present.label}`);
+    },
+    [history, selectedElement, hotSyncIframe, showToast]
+  );
+
+  const handleOpenHistoryTimeline = useCallback(() => {
+    setShowStartHub(false);
+    if (rightSidebarCollapsed) {
+      setRightSidebarCollapsed(false);
+    }
+    setRightPanelTab('history');
+    window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+  }, [rightSidebarCollapsed, postToIframe]);
+
   const handleToggleZenMode = useCallback(() => {
     const nextZen = !(leftSidebarCollapsed && rightSidebarCollapsed);
     setLeftSidebarCollapsed(nextZen);
@@ -1831,6 +1964,11 @@ export default function App() {
       switch (action) {
         case 'open-command-palette':
           setCommandPaletteOpen((prev) => !prev);
+          break;
+        case 'global-find-replace':
+          setShowStartHub(false);
+          setCommandPaletteOpen(false);
+          setGlobalFindReplaceOpen((prev) => !prev);
           break;
         case 'undo':
           handleUndo();
@@ -1989,6 +2127,10 @@ export default function App() {
         case 'escape':
           if (commandPaletteOpen) {
             setCommandPaletteOpen(false);
+          } else if (globalFindReplaceOpen) {
+            setGlobalFindReplaceOpen(false);
+          } else if (statsModalOpen) {
+            setStatsModalOpen(false);
           } else if (githubCommitModalOpen) {
             setGithubCommitModalOpen(false);
           } else if (shortcutsModalOpen) {
@@ -2028,6 +2170,8 @@ export default function App() {
       handleStepZoom,
       handleChangeViewport,
       commandPaletteOpen,
+      globalFindReplaceOpen,
+      statsModalOpen,
       githubCommitModalOpen,
       shortcutsModalOpen,
       postToIframe,
@@ -2053,7 +2197,12 @@ export default function App() {
           editorMode,
           hasSelectedElement: Boolean(selectedElement),
           hasOpenModal:
-            shortcutsModalOpen || githubCommitModalOpen || commandPaletteOpen || showStartHub,
+            shortcutsModalOpen ||
+            githubCommitModalOpen ||
+            commandPaletteOpen ||
+            statsModalOpen ||
+            globalFindReplaceOpen ||
+            showStartHub,
           isTyping: isShortcutTypingTarget(e.target),
         }
       );
@@ -2078,6 +2227,8 @@ export default function App() {
     shortcutsModalOpen,
     githubCommitModalOpen,
     commandPaletteOpen,
+    statsModalOpen,
+    globalFindReplaceOpen,
     showStartHub,
     executeShortcutAction,
   ]);
@@ -2341,6 +2492,8 @@ export default function App() {
           return;
         }
         setGithubBrowseUsername('');
+        setGithubRequiresAuthPrompt(false);
+        setGithubStatusError(null);
         if (data.user) {
           setGithubUser(data.user);
         }
@@ -2677,13 +2830,17 @@ export default function App() {
         const data = (await res.json()) as {
           error?: string;
           requiresAuth?: boolean;
+          sessionExpired?: boolean;
           repoFullName?: string;
           branch?: string;
           files?: Array<{ path: string; name: string; content: string }>;
         };
 
         if (!res.ok || !data.files) {
-          if (data.requiresAuth) {
+          if (data.sessionExpired || (res.status === 401 && githubSessionToken)) {
+            setGithubSessionToken('');
+          }
+          if (data.requiresAuth || res.status === 401) {
             setGithubRequiresAuthPrompt(true);
           }
           setGithubStatusError(data.error || 'Failed to pull from GitHub repository');
@@ -2806,6 +2963,7 @@ export default function App() {
         const data = (await res.json()) as {
           error?: string;
           requiresAuth?: boolean;
+          sessionExpired?: boolean;
           repoFullName?: string;
           branch?: string;
           commitSha?: string;
@@ -2814,7 +2972,10 @@ export default function App() {
         };
 
         if (!res.ok) {
-          if (data.requiresAuth) {
+          if (data.sessionExpired || (res.status === 401 && githubSessionToken)) {
+            setGithubSessionToken('');
+          }
+          if (data.requiresAuth || res.status === 401) {
             setGithubRequiresAuthPrompt(true);
             if (silent) {
               setGithubOpen(true);
@@ -2985,6 +3146,99 @@ export default function App() {
     showToast(`Exported ${slug}.zip`);
   }, [files, projectName, showToast]);
 
+  const handleExportJson = useCallback(() => {
+    const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'project';
+    exportProjectAsJson({
+      projectName,
+      entryHtmlPath,
+      viewport,
+      files,
+      filename: `${slug}.json`,
+    });
+    showToast(`Exported ${slug}.json`);
+  }, [projectName, entryHtmlPath, viewport, files, showToast]);
+
+  const captureLiveSnapshot = useCallback(async () => {
+    const defaultWidth =
+      canvasWidthPx ?? (viewport === 'mobile' ? 390 : viewport === 'tablet' ? 768 : 1280);
+    const defaultHeight = canvasHeightPx ?? 760;
+
+    if (centerTab === 'preview' && iframeRef.current?.contentWindow) {
+      const requestId = `snap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const liveCapture = await new Promise<{
+        cssText: string;
+        bodyHtml: string;
+        width: number;
+        height: number;
+        bodyBg: string;
+      } | null>((resolve) => {
+        const timer = window.setTimeout(() => {
+          pendingSnapshotRef.current.delete(requestId);
+          resolve(null);
+        }, 450);
+
+        pendingSnapshotRef.current.set(requestId, (payload) => {
+          window.clearTimeout(timer);
+          resolve(payload);
+        });
+
+        iframeRef.current?.contentWindow?.postMessage(
+          { type: 'REQUEST_SNAPSHOT_HTML', requestId },
+          '*'
+        );
+      });
+
+      if (liveCapture && liveCapture.bodyHtml) {
+        return {
+          cssText: liveCapture.cssText,
+          bodyHtml: liveCapture.bodyHtml,
+          width: liveCapture.width || defaultWidth,
+          height: liveCapture.height || defaultHeight,
+          bodyBg: liveCapture.bodyBg,
+        };
+      }
+    }
+
+    const fallbackHtml = renderedSrcDoc || activeHtmlFile?.content || '';
+    const extracted = extractBodyAndStylesFromHtml(fallbackHtml);
+    return {
+      cssText: extracted.cssText,
+      bodyHtml: extracted.bodyHtml,
+      width: defaultWidth,
+      height: defaultHeight,
+      bodyBg: '#ffffff',
+    };
+  }, [canvasWidthPx, canvasHeightPx, viewport, centerTab, renderedSrcDoc, activeHtmlFile]);
+
+  const handleExportSnapshot = useCallback(
+    async (format: 'png' | 'svg') => {
+      const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'project';
+      try {
+        const snap = await captureLiveSnapshot();
+        if (format === 'svg') {
+          exportSvgSnapshot({
+            ...snap,
+            title: `${projectName} Snapshot`,
+            filename: `${slug}-snapshot.svg`,
+          });
+          showToast(`Exported ${slug}-snapshot.svg`);
+          return;
+        }
+        await exportPngSnapshot({
+          ...snap,
+          title: `${projectName} Snapshot`,
+          filename: `${slug}-snapshot.png`,
+        });
+        showToast(`Exported ${slug}-snapshot.png`);
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : `Unable to export ${format.toUpperCase()} snapshot`
+        );
+      }
+    },
+    [projectName, captureLiveSnapshot, showToast]
+  );
+
   const activeFile = useMemo(
     () => files.find((f) => f.path === activeFilePath) ?? null,
     [files, activeFilePath]
@@ -3041,12 +3295,29 @@ export default function App() {
             onSaveProject={() => void handleManualSave()}
             onResetProject={handleResetProject}
             onExportZip={handleExportZip}
+            onExportJson={handleExportJson}
+            onExportPngSnapshot={() => void handleExportSnapshot('png')}
+            onExportSvgSnapshot={() => void handleExportSnapshot('svg')}
             onUploadFiles={handleUploadFiles}
             autoSaveStatus={autoSaveStatus}
             onConnectDiskFolder={handleConnectDiskFolder}
             onOpenStartHub={() => setShowStartHub(true)}
             onOpenCommandPalette={() => setCommandPaletteOpen(true)}
             onOpenShortcuts={() => setShortcutsModalOpen(true)}
+            onOpenProjectStats={() => setStatsModalOpen(true)}
+            historyTimelineActive={!rightSidebarCollapsed && rightPanelTab === 'history'}
+            onOpenHistoryTimeline={handleOpenHistoryTimeline}
+            componentLibraryOpen={componentLibraryOpen && !leftSidebarCollapsed}
+            onToggleComponentLibrary={() => {
+              setComponentLibraryOpen((prev) => {
+                const next = leftSidebarCollapsed ? true : !prev;
+                if (next && leftSidebarCollapsed) {
+                  setLeftSidebarCollapsed(false);
+                }
+                return next;
+              });
+              window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+            }}
             githubOpen={githubOpen}
             onToggleGithubOpen={setGithubOpen}
             commitModalOpen={githubCommitModalOpen}
@@ -3086,11 +3357,12 @@ export default function App() {
         {splitDrag && <div className="fixed inset-0 z-40 cursor-col-resize select-none" />}
 
         {leftSidebarCollapsed ? (
-          <div className="w-10 shrink-0 border-r border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col items-start px-1.5 py-2 relative z-20">
+          <div className="w-10 shrink-0 border-r border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col items-start gap-1.5 px-1.5 py-2 relative z-20">
             <button
               type="button"
               onClick={() => {
                 setLeftSidebarCollapsed(false);
+                setComponentLibraryOpen(false);
                 window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
               }}
               aria-label="Expand Project Files sidebar"
@@ -3100,41 +3372,85 @@ export default function App() {
               <PanelLeftOpen className="w-3.5 h-3.5 shrink-0" strokeWidth={1.4} />
               <span className="studio-reveal-label">Files</span>
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                setLeftSidebarCollapsed(false);
+                setComponentLibraryOpen(true);
+                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+              }}
+              aria-label="Open Component Library drawer"
+              title="Open Component Library Drawer"
+              className="group inline-flex items-center h-7 px-1.5 rounded-md bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] border border-[var(--studio-border)] text-[11.5px] font-medium text-indigo-500 dark:text-indigo-400 hover:text-[var(--studio-text-strong)] studio-card-highlight studio-pressable shadow-sm cursor-pointer"
+            >
+              <Blocks className="w-3.5 h-3.5 shrink-0" strokeWidth={1.4} />
+              <span className="studio-reveal-label">Library</span>
+            </button>
           </div>
         ) : (
           <>
-            <FileExplorer
-              widthPx={leftSidebarWidth}
-              onCollapse={() => {
-                setLeftSidebarCollapsed(true);
-                window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
-              }}
-              files={files}
-              activeFilePath={activeFilePath}
-              entryHtmlPath={entryHtmlPath}
-              templates={SAMPLE_TEMPLATES}
-              activeTemplateId={activeTemplateId}
-              onSelectFile={(path) => {
-                setActiveFilePath(path);
-                const targetFile = files.find((f) => f.path === path);
-                if (targetFile?.type === 'html' && centerTab === 'preview') {
-                  handleSwitchPreviewPage(path);
-                }
-              }}
-              onOpenCodeEditor={(path, lineNumber) => {
-                setActiveFilePath(path);
-                setCenterTab('code');
-                if (lineNumber) {
-                  setJumpToLine({ path, line: lineNumber, token: Date.now() });
-                }
-              }}
-              onDownloadFile={(file) => {
-                exportSingleFile(file);
-                showToast(`Downloaded ${file.name}`);
-              }}
-              onCreateFile={handleCreateFile}
-              onLoadTemplate={handleLoadTemplate}
-            />
+            {componentLibraryOpen ? (
+              <ComponentLibraryDrawer
+                widthPx={leftSidebarWidth}
+                onClose={() => {
+                  setComponentLibraryOpen(false);
+                  window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+                }}
+                onShowFiles={() => {
+                  setComponentLibraryOpen(false);
+                  window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+                }}
+                onDragStartComponent={(component) => {
+                  setDraggingComponent(component);
+                  if (centerTab !== 'preview') {
+                    setCenterTab('preview');
+                  }
+                }}
+                onDragEndComponent={() => {
+                  setDraggingComponent(null);
+                  postToIframe({ type: 'CLEAR_DROP_TARGET' });
+                }}
+                onInsertComponent={handleInsertComponentButton}
+              />
+            ) : (
+              <FileExplorer
+                widthPx={leftSidebarWidth}
+                onCollapse={() => {
+                  setLeftSidebarCollapsed(true);
+                  window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+                }}
+                files={files}
+                activeFilePath={activeFilePath}
+                entryHtmlPath={entryHtmlPath}
+                templates={SAMPLE_TEMPLATES}
+                activeTemplateId={activeTemplateId}
+                onSelectFile={(path) => {
+                  setActiveFilePath(path);
+                  const targetFile = files.find((f) => f.path === path);
+                  if (targetFile?.type === 'html' && centerTab === 'preview') {
+                    handleSwitchPreviewPage(path);
+                  }
+                }}
+                onOpenCodeEditor={(path, lineNumber) => {
+                  setActiveFilePath(path);
+                  setCenterTab('code');
+                  if (lineNumber) {
+                    setJumpToLine({ path, line: lineNumber, token: Date.now() });
+                  }
+                }}
+                onDownloadFile={(file) => {
+                  exportSingleFile(file);
+                  showToast(`Downloaded ${file.name}`);
+                }}
+                onCreateFile={handleCreateFile}
+                onLoadTemplate={handleLoadTemplate}
+                onOpenComponentLibrary={() => {
+                  setComponentLibraryOpen(true);
+                  window.requestAnimationFrame(() => postToIframe({ type: 'REQUEST_RECT' }));
+                }}
+                onOpenProjectStats={() => setStatsModalOpen(true)}
+              />
+            )}
             <div
               role="separator"
               aria-orientation="vertical"
@@ -3312,6 +3628,10 @@ export default function App() {
               onPreviewRootVar={handlePreviewRootVar}
               onCommitRootVar={handleCommitRootVar}
               onDeleteRootVar={handleDeleteRootVar}
+              history={history}
+              onUndoHistory={handleUndo}
+              onRedoHistory={handleRedo}
+              onJumpToHistoryIndex={handleJumpToHistoryIndex}
             />
           </>
         )}
@@ -3335,8 +3655,26 @@ export default function App() {
         onZoomFit={() => setCanvasZoom('fit')}
         onOpenStartHub={() => setShowStartHub(true)}
         onOpenShortcuts={() => setShortcutsModalOpen(true)}
+        onOpenProjectStats={() => setStatsModalOpen(true)}
+        onOpenGlobalFindReplace={() => {
+          setShowStartHub(false);
+          setGlobalFindReplaceOpen(true);
+        }}
+        onToggleComponentLibrary={() => {
+          setShowStartHub(false);
+          if (leftSidebarCollapsed) {
+            setLeftSidebarCollapsed(false);
+            setComponentLibraryOpen(true);
+          } else {
+            setComponentLibraryOpen((prev) => !prev);
+          }
+        }}
         onOpenGithub={() => setGithubCommitModalOpen(true)}
+        onOpenHistoryTimeline={handleOpenHistoryTimeline}
         onExportZip={() => void handleExportZip()}
+        onExportJson={handleExportJson}
+        onExportPngSnapshot={() => void handleExportSnapshot('png')}
+        onExportSvgSnapshot={() => void handleExportSnapshot('svg')}
         onApplyFont={(fontCssValue, label) => {
           if (!selectedElement) {
             showToast('Select an element on the canvas first');
@@ -3352,7 +3690,34 @@ export default function App() {
         onSelectTemplate={handleLoadTemplate}
       />
 
-      <ShortcutsModal open={shortcutsModalOpen} onClose={() => setShortcutsModalOpen(false)} />
+      <GlobalFindReplaceModal
+        open={globalFindReplaceOpen}
+        onClose={() => setGlobalFindReplaceOpen(false)}
+        files={files}
+        onExecuteBulkReplace={handleGlobalBulkReplace}
+        onOpenFileAtLine={(path, lineNumber) => {
+          setActiveFilePath(path);
+          setCenterTab('code');
+          setJumpToLine({ path, line: lineNumber, token: Date.now() });
+        }}
+      />
+
+      <ProjectStatsModal
+        open={statsModalOpen}
+        onClose={() => setStatsModalOpen(false)}
+        projectName={projectName}
+        files={files}
+        onOpenFile={(path) => {
+          setActiveFilePath(path);
+          setCenterTab('code');
+        }}
+      />
+
+      <ShortcutsModal
+        open={shortcutsModalOpen}
+        onClose={() => setShortcutsModalOpen(false)}
+        onExecuteShortcut={(action) => executeShortcutAction(action)}
+      />
 
       {toastMessage && (
         <div

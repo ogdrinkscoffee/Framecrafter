@@ -1,13 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  BarChart3,
+  Blocks,
   Check,
+  ChevronDown,
   Command,
   Download,
+  FileArchive,
+  FileJson,
   FolderOpen,
   GitBranch,
   GitCommitHorizontal,
   HardDrive,
+  History,
   Home,
+  Image as ImageIcon,
   Keyboard,
   Laptop,
   Moon,
@@ -67,12 +74,20 @@ interface TopToolbarProps extends GitHubOAuthProps {
   onSaveProject: () => void;
   onResetProject: () => void;
   onExportZip: () => void;
+  onExportJson: () => void;
+  onExportPngSnapshot: () => void;
+  onExportSvgSnapshot: () => void;
   onUploadFiles: (fileList: FileList) => void;
   autoSaveStatus: AutoSaveStatus;
   onConnectDiskFolder: () => void;
   onOpenStartHub: () => void;
   onOpenCommandPalette: () => void;
   onOpenShortcuts: () => void;
+  onOpenProjectStats: () => void;
+  historyTimelineActive: boolean;
+  onOpenHistoryTimeline: () => void;
+  componentLibraryOpen: boolean;
+  onToggleComponentLibrary: () => void;
   githubOpen: boolean;
   onToggleGithubOpen: (open: boolean) => void;
   commitModalOpen: boolean;
@@ -109,12 +124,20 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onSaveProject,
   onResetProject,
   onExportZip,
+  onExportJson,
+  onExportPngSnapshot,
+  onExportSvgSnapshot,
   onUploadFiles,
   autoSaveStatus,
   onConnectDiskFolder,
   onOpenStartHub,
   onOpenCommandPalette,
   onOpenShortcuts,
+  onOpenProjectStats,
+  historyTimelineActive,
+  onOpenHistoryTimeline,
+  componentLibraryOpen,
+  onToggleComponentLibrary,
   githubOpen,
   onToggleGithubOpen,
   commitModalOpen,
@@ -148,19 +171,34 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const themeMenuRef = useRef<HTMLDivElement>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   const isLightTheme = studioTheme === 'daylight' || studioTheme === 'paper';
 
   useEffect(() => {
-    if (!themeMenuOpen) return;
+    if (!themeMenuOpen && !exportMenuOpen) return;
     const handleOutside = (e: MouseEvent) => {
-      if (themeMenuRef.current && !themeMenuRef.current.contains(e.target as Node)) {
+      if (themeMenuOpen && themeMenuRef.current && !themeMenuRef.current.contains(e.target as Node)) {
         setThemeMenuOpen(false);
+      }
+      if (exportMenuOpen && exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setThemeMenuOpen(false);
+        setExportMenuOpen(false);
       }
     };
     window.addEventListener('mousedown', handleOutside);
-    return () => window.removeEventListener('mousedown', handleOutside);
-  }, [themeMenuOpen]);
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('mousedown', handleOutside);
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, [themeMenuOpen, exportMenuOpen]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -334,6 +372,24 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             icon={<Redo2 className="w-3.5 h-3.5" strokeWidth={1.4} />}
           />
           <HoverIconButton
+            onClick={onOpenHistoryTimeline}
+            active={historyTimelineActive}
+            tone="accent"
+            label="History"
+            ariaLabel="Open Visual History Timeline"
+            title="Visual History Timeline (Jump to any state)"
+            icon={
+              <History
+                className={`w-3.5 h-3.5 ${
+                  historyTimelineActive
+                    ? 'text-indigo-500 dark:text-indigo-300'
+                    : 'text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]'
+                }`}
+                strokeWidth={1.4}
+              />
+            }
+          />
+          <HoverIconButton
             onClick={onSaveProject}
             label="Save"
             ariaLabel="Save changes"
@@ -424,6 +480,33 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         </div>
 
         <HoverIconButton
+          onClick={onToggleComponentLibrary}
+          active={componentLibraryOpen}
+          tone="accent"
+          label="Library"
+          ariaLabel="Toggle Component Library drawer"
+          title="Component Library Drawer"
+          icon={
+            <Blocks
+              className={`w-3.5 h-3.5 ${
+                componentLibraryOpen
+                  ? 'text-indigo-500 dark:text-indigo-300'
+                  : 'text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]'
+              }`}
+              strokeWidth={1.5}
+            />
+          }
+        />
+
+        <HoverIconButton
+          onClick={onOpenProjectStats}
+          label="Stats"
+          ariaLabel="Open Project Statistics"
+          title="Project Statistics (File Count, LOC & Distribution)"
+          icon={<BarChart3 className="w-3.5 h-3.5 text-sky-500 dark:text-sky-400" strokeWidth={1.5} />}
+        />
+
+        <HoverIconButton
           onClick={onOpenCommandPalette}
           label="Commands"
           ariaLabel="Open Command Palette"
@@ -435,7 +518,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           onClick={onOpenShortcuts}
           label="Shortcuts"
           ariaLabel="Keyboard shortcuts"
-          title="Keyboard Shortcuts (?)"
+          title="Keyboard Shortcuts (Shift + ?)"
           icon={<Keyboard className="w-3.5 h-3.5 text-[var(--studio-muted)] group-hover:text-[var(--studio-text-strong)]" strokeWidth={1.4} />}
         />
 
@@ -526,17 +609,115 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           />
         </div>
 
-        {/* Export ZIP (Icon-Only at Rest, Reveals Label on Hover) */}
-        <button
-          type="button"
-          onClick={onExportZip}
-          aria-label="Export ZIP"
-          title="Export modified project as ZIP"
-          className="group inline-flex items-center h-8 px-2.5 rounded-lg text-[11.5px] font-semibold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-400/30 shadow-xs studio-pressable whitespace-nowrap shrink-0 cursor-pointer"
-        >
-          <Download className="w-3.5 h-3.5 shrink-0" strokeWidth={1.5} />
-          <span className="studio-reveal-label">Export ZIP</span>
-        </button>
+        {/* Export Dropdown Menu (ZIP, JSON, PNG Snapshot, SVG Snapshot) */}
+        <div className="relative" ref={exportMenuRef}>
+          <button
+            type="button"
+            onClick={() => setExportMenuOpen((prev) => !prev)}
+            data-testid="export-menu-button"
+            aria-haspopup="menu"
+            aria-expanded={exportMenuOpen}
+            aria-label="Export options"
+            title="Export ZIP, JSON, or PNG/SVG visual snapshot"
+            className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[11.5px] font-semibold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-400/30 shadow-xs studio-pressable whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5 shrink-0" strokeWidth={1.5} />
+            <span>Export</span>
+            <ChevronDown className="w-3 h-3 opacity-85 shrink-0" strokeWidth={1.7} />
+          </button>
+
+          {exportMenuOpen && (
+            <div
+              role="menu"
+              aria-label="Export options"
+              data-testid="export-menu-popover"
+              className="absolute right-0 top-full mt-2 w-60 z-50 rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-xl studio-card-highlight p-1.5 space-y-0.5"
+            >
+              <div className="px-2.5 py-1 studio-section-header">Export Project &amp; Preview</div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setExportMenuOpen(false);
+                  onExportZip();
+                }}
+                className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-[var(--studio-hover)] transition-colors cursor-pointer"
+              >
+                <FileArchive className="w-4 h-4 text-indigo-500 dark:text-indigo-400 mt-0.5 shrink-0" strokeWidth={1.5} />
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-[var(--studio-text-strong)]">
+                    Export as ZIP Archive
+                  </div>
+                  <div className="text-[10.5px] text-[var(--studio-muted)]">
+                    Full workspace source files &amp; assets
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setExportMenuOpen(false);
+                  onExportJson();
+                }}
+                className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-[var(--studio-hover)] transition-colors cursor-pointer"
+              >
+                <FileJson className="w-4 h-4 text-emerald-500 dark:text-emerald-400 mt-0.5 shrink-0" strokeWidth={1.5} />
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-[var(--studio-text-strong)]">
+                    Export to JSON
+                  </div>
+                  <div className="text-[10.5px] text-[var(--studio-muted)]">
+                    Structured project tree &amp; metadata
+                  </div>
+                </div>
+              </button>
+
+              <div className="my-1 border-t border-[var(--studio-border-subtle)]" />
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setExportMenuOpen(false);
+                  onExportPngSnapshot();
+                }}
+                className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-[var(--studio-hover)] transition-colors cursor-pointer"
+              >
+                <ImageIcon className="w-4 h-4 text-sky-500 dark:text-sky-400 mt-0.5 shrink-0" strokeWidth={1.5} />
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-[var(--studio-text-strong)]">
+                    Export PNG Snapshot
+                  </div>
+                  <div className="text-[10.5px] text-[var(--studio-muted)]">
+                    High-DPI raster image of canvas preview
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setExportMenuOpen(false);
+                  onExportSvgSnapshot();
+                }}
+                className="w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-[var(--studio-hover)] transition-colors cursor-pointer"
+              >
+                <ImageIcon className="w-4 h-4 text-violet-500 dark:text-violet-400 mt-0.5 shrink-0" strokeWidth={1.5} />
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-[var(--studio-text-strong)]">
+                    Export SVG Snapshot
+                  </div>
+                  <div className="text-[10.5px] text-[var(--studio-muted)]">
+                    Scalable vector &amp; HTML preview capture
+                  </div>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
 
@@ -551,9 +732,12 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         statusMessage={githubStatusMessage}
         requiresAuthPrompt={githubRequiresAuthPrompt}
         githubUser={githubUser}
+        githubAccountReadOnly={githubAccountReadOnly}
         githubRepos={githubRepos}
         githubConnecting={githubConnecting}
+        githubOAuthConfigured={githubOAuthConfigured}
         onConnectGitHub={onConnectGitHub}
+        onRefreshGitHubRepos={onRefreshGitHubRepos}
         onFetchRepoBranches={onFetchRepoBranches}
         onSwitchBranch={onSwitchBranch}
         onPullFromGitHub={onPullFromGitHub}

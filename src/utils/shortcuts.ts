@@ -11,6 +11,7 @@ export type ShortcutAction =
   | 'toggle-zen'
   | 'toggle-outlines'
   | 'open-command-palette'
+  | 'global-find-replace'
   | 'duplicate'
   | 'copy-element'
   | 'cut-element'
@@ -63,12 +64,13 @@ export interface ShortcutDefinition {
 
 export const KEYBOARD_SHORTCUTS: ShortcutDefinition[] = [
   { action: 'open-command-palette', keys: ['Ctrl / Cmd', 'K'], label: 'Open Command Palette (search actions, fonts, templates)', category: 'General & Navigation' },
+  { action: 'global-find-replace', keys: ['Ctrl / Cmd', 'Shift', 'F'], label: 'Global Find & Replace across all project files', category: 'General & Navigation' },
   { action: 'undo', keys: ['Ctrl / Cmd', 'Z'], label: 'Undo last visual or code edit (instant, no reload)', category: 'General & Navigation' },
   { action: 'redo', keys: ['Ctrl / Cmd', 'Shift', 'Z'], label: 'Redo edit (also Ctrl/Cmd + Y)', category: 'General & Navigation' },
   { action: 'save', keys: ['Ctrl / Cmd', 'S'], label: 'Save project to disk / workspace storage', category: 'General & Navigation' },
   { action: 'toggle-mode', keys: ['Ctrl / Cmd', 'E'], label: 'Toggle Editing Mode / Using Mode', category: 'General & Navigation' },
   { action: 'mode-edit', keys: ['V'], label: 'Switch directly to Selection / Editing Mode', category: 'General & Navigation' },
-  { action: 'open-shortcuts', keys: ['?'], label: 'Open Keyboard Shortcuts reference', category: 'General & Navigation' },
+  { action: 'open-shortcuts', keys: ['Shift', '?'], label: 'Open interactive Keyboard Shortcuts overlay', category: 'General & Navigation' },
   { action: 'escape', keys: ['Esc'], label: 'Deselect element or close open dialog', category: 'General & Navigation' },
 
   { action: 'toggle-left-sidebar', keys: ['Ctrl / Cmd', 'B'], label: 'Collapse / expand Project Files sidebar', category: 'Viewports, Zoom & Panels' },
@@ -171,6 +173,7 @@ export function matchShortcutAction(
   }
 
   if (hasMod && !event.altKey) {
+    if (keyLower === 'f' && event.shiftKey) return 'global-find-replace';
     if (keyLower === 'z' && !event.shiftKey) return 'undo';
     if (keyLower === 'y' || (keyLower === 'z' && event.shiftKey)) return 'redo';
     if (keyLower === 'e' && !event.shiftKey) return 'toggle-mode';
@@ -206,7 +209,9 @@ export function matchShortcutAction(
   }
 
   if (!hasMod && !event.altKey) {
-    if (event.key === '?') return 'open-shortcuts';
+    if (event.key === '?' || (event.shiftKey && event.code === 'Slash')) {
+      return 'open-shortcuts';
+    }
     if (ctx.hasOpenModal) return null;
 
     // Shift + 1 / ! -> Zoom to Fit (Figma convention)

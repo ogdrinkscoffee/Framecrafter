@@ -20,7 +20,12 @@ export type EditorMode = 'edit' | 'interact';
 
 export type CenterTab = 'preview' | 'code';
 
-export type RightPanelTab = 'inspector' | 'elements' | 'seo' | 'global-styles';
+export type RightPanelTab =
+  | 'inspector'
+  | 'elements'
+  | 'seo'
+  | 'global-styles'
+  | 'history';
 
 export interface ElementRect {
   top: number;
@@ -182,10 +187,19 @@ export interface SampleTemplate {
   files: ProjectFile[];
 }
 
+export type ComponentLibraryGroup =
+  | 'Heroes'
+  | 'Cards'
+  | 'Buttons'
+  | 'Navigation'
+  | 'Forms'
+  | 'Layout';
+
 export interface DraggableComponentDef {
   id: string;
   name: string;
   category: 'Components' | 'Shapes & Lines' | 'Tables & Lists' | 'Layout' | 'Typography' | 'Inputs';
+  libraryGroup?: ComponentLibraryGroup;
   description: string;
   html: string;
 }

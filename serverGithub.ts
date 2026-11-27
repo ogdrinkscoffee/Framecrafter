@@ -20,13 +20,26 @@ const GITHUB_API_BASE = 'https://api.github.com';
 const MAX_PULL_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_PULL_FILES = 350;
 
+export function sanitizeGitHubToken(raw?: string | null): string {
+  if (typeof raw !== 'string') return '';
+  let clean = raw.trim();
+  if (
+    (clean.startsWith('"') && clean.endsWith('"')) ||
+    (clean.startsWith("'") && clean.endsWith("'"))
+  ) {
+    clean = clean.slice(1, -1).trim();
+  }
+  clean = clean.replace(/^(?:Bearer|token)\s+/i, '').trim();
+  return clean;
+}
+
 function buildGitHubHeaders(token?: string): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: 'application/vnd.github+json',
     'User-Agent': 'Framecraft-Studio',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  const cleanToken = token?.trim();
+  const cleanToken = sanitizeGitHubToken(token);
   if (cleanToken) {
     headers.Authorization = `Bearer ${cleanToken}`;
   }
@@ -141,7 +154,7 @@ export async function listAuthenticatedGitHubRepos(
   accessToken: string,
   query?: string
 ): Promise<GitHubReposResponse> {
-  const cleanToken = accessToken.trim();
+  const cleanToken = sanitizeGitHubToken(accessToken);
   if (!cleanToken) {
     return { ok: false, requiresAuth: true, error: 'Connect your GitHub account first.' };
   }
@@ -168,7 +181,16 @@ export async function listAuthenticatedGitHubRepos(
     ),
   ]);
 
-  if (reposRes.status === 401 || reposRes.status === 403) {
+  if (reposRes.status === 401) {
+    return {
+      ok: false,
+      requiresAuth: true,
+      error:
+        'GitHub rejected this token (Bad credentials). Check or regenerate your Personal Access Token with repo & read:user scopes.',
+    };
+  }
+
+  if (reposRes.status === 403) {
     return {
       ok: false,
       requiresAuth: true,
@@ -530,13 +552,15 @@ export async function pushToGitHubRepo(params: {
     return { ok: false, error: parsed.error };
   }
 
-  const authToken = params.token?.trim() || process.env.GITHUB_TOKEN?.trim() || '';
+  const userToken = sanitizeGitHubToken(params.token);
+  const envToken = sanitizeGitHubToken(process.env.GITHUB_TOKEN);
+  const authToken = userToken || envToken;
   if (!authToken) {
     return {
       ok: false,
       requiresAuth: true,
       error:
-        'GitHub requires a Personal Access Token (repo / Contents write access) to commit and push changes.',
+        'Connect your GitHub account or paste a Personal Access Token (with repo / Contents write access) to commit and push changes.',
     };
   }
 
@@ -544,15 +568,28 @@ export async function pushToGitHubRepo(params: {
   const repoMetaRes = await fetchGitHubJson<{
     default_branch?: string;
     full_name?: string;
+    permissions?: { push?: boolean };
   }>(`/repos/${owner}/${repo}`, authToken);
 
-  if (repoMetaRes.status === 401 || repoMetaRes.status === 403 || repoMetaRes.status === 404) {
+  if (repoMetaRes.status === 401) {
+    return {
+      ok: false,
+      requiresAuth: true,
+      error: userToken
+        ? 'GitHub rejected your token ("Bad credentials"). Reconnect GitHub or paste a valid Personal Access Token with repo write access.'
+        : 'You are browsing public repositories in read-only mode. Connect your GitHub account or paste a Personal Access Token (with repo / Contents write access) to push commits.',
+    };
+  }
+
+  if (repoMetaRes.status === 403 || repoMetaRes.status === 404) {
     return {
       ok: false,
       requiresAuth: true,
       error:
-        repoMetaRes.message ||
-        `Unable to access ${repoFullName} with this token (HTTP ${repoMetaRes.status}).`,
+        repoMetaRes.status === 404
+          ? `Could not access ${repoFullName} with this token (HTTP 404). Make sure the repository exists and your token has repo access.`
+          : repoMetaRes.message ||
+            `Permission denied accessing ${repoFullName} (HTTP ${repoMetaRes.status}). Make sure your token has repo / Contents write access.`,
     };
   }
 
@@ -585,11 +622,22 @@ export async function pushToGitHubRepo(params: {
     object?: { sha?: string };
   }>(`/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(targetBranch)}`, authToken);
 
-  if (refRes.status === 401 || refRes.status === 403) {
+  if (refRes.status === 401) {
     return {
       ok: false,
       requiresAuth: true,
-      error: refRes.message || 'Token lacks write permission on this repository.',
+      error:
+        'GitHub rejected your credentials ("Bad credentials"). Reconnect GitHub or paste a valid Personal Access Token with repo write access.',
+    };
+  }
+
+  if (refRes.status === 403) {
+    return {
+      ok: false,
+      requiresAuth: true,
+      error:
+        refRes.message ||
+        'Token lacks write permission on this repository (requires repo or Contents: Read & write).',
     };
   }
 

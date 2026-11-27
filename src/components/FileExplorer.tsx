@@ -1,5 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
+  BarChart3,
+  Blocks,
   Braces,
   ChevronDown,
   ChevronRight,
@@ -40,6 +42,8 @@ interface FileExplorerProps {
   onDownloadFile: (file: ProjectFile) => void;
   onCreateFile: (filename: string) => void;
   onLoadTemplate: (templateId: string) => void;
+  onOpenComponentLibrary?: () => void;
+  onOpenProjectStats?: () => void;
 }
 
 export const FileExplorer: React.FC<FileExplorerProps> = ({
@@ -55,6 +59,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   onDownloadFile,
   onCreateFile,
   onLoadTemplate,
+  onOpenComponentLibrary,
+  onOpenProjectStats,
 }) => {
   const [isCreating, setIsCreating] = useState(false);
   const [newFilename, setNewFilename] = useState('');
@@ -93,6 +99,17 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
       <div className="h-9 px-3 border-b border-[var(--studio-border)] flex items-center justify-between gap-2 shrink-0">
         <span className="studio-section-header truncate">Project Files</span>
         <div className="flex items-center gap-1 shrink-0">
+          {onOpenComponentLibrary && (
+            <HoverIconButton
+              size="xs"
+              onClick={onOpenComponentLibrary}
+              label="Library"
+              ariaLabel="Open Component Library drawer"
+              title="Open Component Library Drawer"
+              tone="accent"
+              icon={<Blocks className="w-3.5 h-3.5" strokeWidth={1.4} />}
+            />
+          )}
           <HoverIconButton
             size="xs"
             onClick={() => setIsCreating((prev) => !prev)}
@@ -265,9 +282,23 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
           })}
         </div>
         <div className="pt-0.5 px-0.5 flex items-center justify-between text-[11px] text-[var(--studio-muted-soft)] font-mono-tabular">
-          <span>
-            {files.length} {files.length === 1 ? 'file' : 'files'}
-          </span>
+          {onOpenProjectStats ? (
+            <button
+              type="button"
+              onClick={onOpenProjectStats}
+              title="View Project Statistics"
+              className="inline-flex items-center gap-1 text-[var(--studio-muted)] hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+            >
+              <BarChart3 className="w-3 h-3" strokeWidth={1.5} />
+              <span>
+                {files.length} {files.length === 1 ? 'file' : 'files'}
+              </span>
+            </button>
+          ) : (
+            <span>
+              {files.length} {files.length === 1 ? 'file' : 'files'}
+            </span>
+          )}
           <span className="truncate max-w-[140px]" title={entryHtmlPath ?? 'no html entry'}>
             {entryHtmlPath ?? 'no html entry'}
           </span>

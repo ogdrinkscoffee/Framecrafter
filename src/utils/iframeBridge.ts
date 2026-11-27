@@ -1338,6 +1338,37 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
     if (msg.type === 'REQUEST_RECT') {
       notifyRectChange();
+      return;
+    }
+
+    if (msg.type === 'REQUEST_SNAPSHOT_HTML' && document.body) {
+      var snapStyles = [];
+      var styleNodes = document.querySelectorAll('style');
+      for (var si = 0; si < styleNodes.length; si++) {
+        var st = styleNodes[si];
+        if (!isInternalEl(st) && st.textContent) {
+          snapStyles.push(st.textContent);
+        }
+      }
+      var bodyClone = document.body.cloneNode(true);
+      var internalInClone = bodyClone.querySelectorAll('[data-ve-internal], script, iframe');
+      for (var ci = 0; ci < internalInClone.length; ci++) {
+        var rm = internalInClone[ci];
+        if (rm && rm.parentNode) rm.parentNode.removeChild(rm);
+      }
+      bodyClone.removeAttribute('data-ve-outlines');
+      var compBody = window.getComputedStyle(document.body);
+      var docEl = document.documentElement;
+      var snapW = Math.max(window.innerWidth || 0, docEl ? docEl.scrollWidth : 0, 1024);
+      var snapH = Math.max(window.innerHeight || 0, docEl ? docEl.scrollHeight : 0, 680);
+      postToParent('SNAPSHOT_HTML_RESPONSE', {
+        requestId: msg.requestId || '',
+        cssText: snapStyles.join('\\n'),
+        bodyHtml: bodyClone.innerHTML,
+        width: snapW,
+        height: snapH,
+        bodyBg: compBody && compBody.backgroundColor ? compBody.backgroundColor : '#ffffff'
+      });
     }
   });
 

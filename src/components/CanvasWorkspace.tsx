@@ -70,6 +70,7 @@ import type {
   ViewportPreset,
 } from '../types/editor';
 import { QUICK_INSERT_ITEMS } from '../utils/codeSync';
+import { DRAGGABLE_COMPONENTS } from '../utils/componentCatalog';
 import { FONT_CATEGORIES, STUDIO_FONT_CATALOG, matchStudioFontOption } from '../utils/fontLibrary';
 import { buildTableHtml, cssColorToHex } from '../utils/htmlSync';
 import { HoverIconButton } from './StudioPrimitives';
@@ -712,10 +713,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   };
 
   const handleDropCanvas = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!draggingComponent) return;
+    const droppedId = e.dataTransfer?.getData('text/plain');
+    const resolvedComponent =
+      draggingComponent ??
+      (droppedId ? DRAGGABLE_COMPONENTS.find((c) => c.id === droppedId) ?? null : null);
+    if (!resolvedComponent) return;
     e.preventDefault();
     onPostIframeMessage({ type: 'CLEAR_DROP_TARGET' });
-    onDropComponentOnCanvas(draggingComponent);
+    onDropComponentOnCanvas(resolvedComponent);
   };
 
   const startFrameResize = (axis: 'left' | 'right' | 'bottom', e: React.PointerEvent) => {

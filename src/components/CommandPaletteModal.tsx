@@ -1,17 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BarChart3,
+  Blocks,
   Command,
   CornerDownLeft,
   Download,
   Eye,
+  FileJson,
   GitBranch,
+  History,
   Home,
+  Image as ImageIcon,
   Keyboard,
   LayoutTemplate,
   Maximize2,
   MousePointer2,
   Plus,
   Redo2,
+  Replace,
   Search,
   Shapes,
   Type,
@@ -49,8 +55,15 @@ interface CommandPaletteModalProps {
   onZoomFit: () => void;
   onOpenStartHub: () => void;
   onOpenShortcuts: () => void;
+  onOpenProjectStats?: () => void;
+  onOpenGlobalFindReplace?: () => void;
+  onOpenHistoryTimeline?: () => void;
+  onToggleComponentLibrary?: () => void;
   onOpenGithub: () => void;
   onExportZip: () => void;
+  onExportJson?: () => void;
+  onExportPngSnapshot?: () => void;
+  onExportSvgSnapshot?: () => void;
   onApplyFont: (fontCssValue: string, label: string) => void;
   onQuickInsertComponent: (componentId: string) => void;
   onSelectTemplate: (templateId: string) => void;
@@ -72,8 +85,15 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
   onZoomFit,
   onOpenStartHub,
   onOpenShortcuts,
+  onOpenProjectStats,
+  onOpenGlobalFindReplace,
+  onOpenHistoryTimeline,
+  onToggleComponentLibrary,
   onOpenGithub,
   onExportZip,
+  onExportJson,
+  onExportPngSnapshot,
+  onExportSvgSnapshot,
   onApplyFont,
   onQuickInsertComponent,
   onSelectTemplate,
@@ -157,6 +177,52 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         icon: <Home className="w-3.5 h-3.5 text-cyan-400" strokeWidth={1.5} />,
         run: onOpenStartHub,
       },
+      ...(onOpenGlobalFindReplace
+        ? [
+            {
+              id: 'act-global-find-replace',
+              group: 'Actions' as const,
+              label: 'Global Find & Replace Across All Project Files',
+              detail: 'Search text, regex, or whole words and bulk replace',
+              shortcut: 'Ctrl+Shift+F',
+              icon: <Replace className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />,
+              run: onOpenGlobalFindReplace,
+            },
+          ]
+        : []),
+      ...(onOpenProjectStats
+        ? [
+            {
+              id: 'act-project-stats',
+              group: 'Actions' as const,
+              label: 'View Project Statistics (Files, LOC & Distribution)',
+              icon: <BarChart3 className="w-3.5 h-3.5 text-sky-400" strokeWidth={1.5} />,
+              run: onOpenProjectStats,
+            },
+          ]
+        : []),
+      ...(onToggleComponentLibrary
+        ? [
+            {
+              id: 'act-component-library',
+              group: 'Actions' as const,
+              label: 'Toggle Component Library Sidebar Drawer',
+              icon: <Blocks className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />,
+              run: onToggleComponentLibrary,
+            },
+          ]
+        : []),
+      ...(onOpenHistoryTimeline
+        ? [
+            {
+              id: 'act-history-timeline',
+              group: 'Actions' as const,
+              label: 'Open Visual History Timeline (Jump to Any State)',
+              icon: <History className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />,
+              run: onOpenHistoryTimeline,
+            },
+          ]
+        : []),
       {
         id: 'act-github',
         group: 'Actions',
@@ -168,17 +234,50 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         id: 'act-shortcuts',
         group: 'Actions',
         label: 'View All Keyboard Shortcuts',
-        shortcut: '?',
+        shortcut: 'Shift+?',
         icon: <Keyboard className="w-3.5 h-3.5" strokeWidth={1.5} />,
         run: onOpenShortcuts,
       },
       {
         id: 'act-export',
         group: 'Actions',
-        label: 'Export Project as ZIP',
+        label: 'Export Project as ZIP Archive',
         icon: <Download className="w-3.5 h-3.5 text-indigo-400" strokeWidth={1.5} />,
         run: onExportZip,
       },
+      ...(onExportJson
+        ? [
+            {
+              id: 'act-export-json',
+              group: 'Actions' as const,
+              label: 'Export Project Structure to JSON',
+              icon: <FileJson className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.5} />,
+              run: onExportJson,
+            },
+          ]
+        : []),
+      ...(onExportPngSnapshot
+        ? [
+            {
+              id: 'act-export-png',
+              group: 'Actions' as const,
+              label: 'Export Visual Preview as PNG Snapshot',
+              icon: <ImageIcon className="w-3.5 h-3.5 text-sky-400" strokeWidth={1.5} />,
+              run: onExportPngSnapshot,
+            },
+          ]
+        : []),
+      ...(onExportSvgSnapshot
+        ? [
+            {
+              id: 'act-export-svg',
+              group: 'Actions' as const,
+              label: 'Export Visual Preview as SVG Snapshot',
+              icon: <ImageIcon className="w-3.5 h-3.5 text-violet-400" strokeWidth={1.5} />,
+              run: onExportSvgSnapshot,
+            },
+          ]
+        : []),
     ];
 
     const fontItems: CommandItem[] = STUDIO_FONT_CATALOG.map((font) => ({
@@ -228,9 +327,16 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
     onZoomFit,
     onZoom100,
     onOpenStartHub,
+    onOpenProjectStats,
+    onOpenGlobalFindReplace,
+    onOpenHistoryTimeline,
+    onToggleComponentLibrary,
     onOpenGithub,
     onOpenShortcuts,
     onExportZip,
+    onExportJson,
+    onExportPngSnapshot,
+    onExportSvgSnapshot,
     onApplyFont,
     onQuickInsertComponent,
     onSelectTemplate,

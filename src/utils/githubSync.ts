@@ -51,6 +51,7 @@ export interface GitHubReposResponse {
   user?: GitHubUserProfile;
   repos?: GitHubRepoSummary[];
   requiresAuth?: boolean;
+  sessionExpired?: boolean;
   error?: string;
 }
 
@@ -68,6 +69,7 @@ export interface GitHubPullResponse {
   files?: Array<{ path: string; name: string; content: string }>;
   truncated?: boolean;
   requiresAuth?: boolean;
+  sessionExpired?: boolean;
   error?: string;
 }
 
@@ -79,6 +81,7 @@ export interface GitHubPushResponse {
   commitUrl?: string;
   filesPushed?: number;
   requiresAuth?: boolean;
+  sessionExpired?: boolean;
   error?: string;
 }
 
