@@ -122,7 +122,13 @@ export function normalizeOriginCandidate(raw: unknown): string | null {
         // Ignore malformed APP_URL
       }
     }
-    if (parsed.protocol === 'https:' && host.endsWith('.run.app')) {
+    // Only accept Freebuff-managed .run.app deployments (e.g. ais-dev-*.run.app).
+    // Arbitrary .run.app subdomains must not be treated as trusted origins.
+    if (
+      parsed.protocol === 'https:' &&
+      /^[a-z0-9-]+-[a-z0-9]+\.run\.app$/i.test(host) &&
+      host.split('.')[0].startsWith('ais-')
+    ) {
       return parsed.origin;
     }
     if (host === 'localhost' || host === '127.0.0.1') {

@@ -2364,7 +2364,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                               title={`${board.label} ${board.widthPx}px Preview`}
                               data-testid={`artboard-iframe-${board.id}`}
                               srcDoc={srcDoc}
-                              sandbox="allow-scripts allow-forms allow-popups"
+                              sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
                               className={`w-full h-full border-0 block bg-white ${
                                 panDrag || spacePressed || dragState || draggingComponent
                                   ? 'pointer-events-none select-none'
@@ -2540,7 +2540,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                     ref={iframeRef}
                     title="Live App Preview"
                     srcDoc={srcDoc}
-                    sandbox="allow-scripts allow-forms allow-popups"
+                    sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
                     className={`w-full h-full border-0 block bg-white ${
                       dragState || frameDrag || draggingComponent
                         ? 'pointer-events-none select-none'
