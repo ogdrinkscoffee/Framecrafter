@@ -9,11 +9,12 @@ export type EditElementWithGeminiResult =
     }
   | {
       ok: false;
-      status: 502 | 503 | 429;
+      status: 502 | 503 | 429 | 504;
       error: string;
     };
 
 const GEMINI_MODEL = 'gemini-4-hydrogen';
+const GEMINI_TIMEOUT_MS = 30_000;
 
 function stripOptionalMarkdownFences(code: string): string {
   const trimmed = code.trim();
@@ -83,6 +84,9 @@ export async function editElementWithGemini(
   });
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
+
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: buildUserPrompt(input),
@@ -108,6 +112,14 @@ export async function editElementWithGemini(
     });
 
     const rawText = (response.text ?? '').trim();
+    if (controller.signal.aborted) {
+      return {
+        ok: false,
+        status: 504,
+        error: 'AI Co-Pilot request timed out. Please try again.',
+      };
+    }
+
     if (!rawText) {
       return {
         ok: false,
@@ -144,6 +156,8 @@ export async function editElementWithGemini(
       };
     }
 
+    clearTimeout(timeout);
+
     return {
       ok: true,
       updatedCode,
@@ -156,6 +170,15 @@ export async function editElementWithGemini(
         : 0;
     const message = err instanceof Error ? err.message : '';
     console.error('Gemini edit-element error:', statusCode || message);
+
+    // Treat AbortError from our timeout as a 504, not a generic 502.
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      return {
+        ok: false,
+        status: 504,
+        error: 'AI Co-Pilot request timed out. Please try again.',
+      };
+    }
 
     if (statusCode === 429 || /RESOURCE_EXHAUSTED|quota|rate limit/i.test(message)) {
       return {

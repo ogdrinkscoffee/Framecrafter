@@ -338,7 +338,7 @@ export const StartHub: React.FC<StartHubProps> = ({
   return (
     <div
       data-testid="start-hub"
-      className="relative h-screen w-screen overflow-y-auto builder-scroll bg-[var(--studio-bg)] text-[var(--studio-text-strong)] flex flex-col"
+      className="relative flex-1 min-h-0 w-full overflow-y-auto builder-scroll studio-shell text-[var(--studio-text-strong)] flex flex-col"
     >
       <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 studio-grain" />
 
@@ -362,7 +362,7 @@ export const StartHub: React.FC<StartHubProps> = ({
       />
 
       {/* Minimal Header */}
-      <header className="sticky top-0 z-20 h-13 shrink-0 border-b border-[var(--studio-border)] bg-[var(--studio-surface)]/95 backdrop-blur-md px-6 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-20 h-14 shrink-0 border-b border-[var(--studio-border)] bg-[var(--studio-surface)]/80 backdrop-blur-xl px-6 flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5">
           <FramecraftLogoMark className="w-6 h-6" />
           <span className="font-display font-semibold text-[15px] tracking-[-0.02em] text-[var(--studio-text-strong)]">
@@ -401,7 +401,7 @@ export const StartHub: React.FC<StartHubProps> = ({
           <button
             type="button"
             onClick={onResumeWorkspace}
-            className="h-8 px-3.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[12px] font-semibold inline-flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+            className="h-8 px-3.5 rounded-[10px] bg-gradient-to-b from-indigo-500 to-indigo-700 hover:from-indigo-400 hover:to-indigo-600 text-white text-[12px] font-semibold inline-flex items-center gap-1.5 shadow-[0_8px_20px_-12px_rgba(20,163,146,0.95)] cursor-pointer transition-colors"
           >
             <span>Open Studio</span>
             <ArrowRight className="w-3.5 h-3.5" strokeWidth={1.6} />
@@ -412,12 +412,12 @@ export const StartHub: React.FC<StartHubProps> = ({
       <div className="relative z-10 w-full max-w-6xl mx-auto px-6 py-8 space-y-8 flex-1">
         {/* Hero & Quick Start Row */}
         <section className="space-y-4">
-          <div className="flex flex-col md:flex-row md:items-end justify-between gap-3">
+          <div className="studio-hero flex flex-col md:flex-row md:items-end justify-between gap-5 rounded-[18px] border border-[var(--studio-border)] bg-[var(--studio-surface)] px-6 py-6 studio-panel-shadow">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-indigo-500 dark:text-indigo-400 mb-1">
+              <p className="studio-eyebrow mb-3">
                 Project Hub
               </p>
-              <h1 className="font-display text-[26px] font-semibold tracking-[-0.025em] text-[var(--studio-text-strong)] leading-tight">
+              <h1 className="font-display text-[30px] sm:text-[36px] font-semibold tracking-[-0.04em] text-[var(--studio-text-strong)] leading-[1.06]">
                 Start from a canvas, local folder, or GitHub repo
               </h1>
             </div>
@@ -431,7 +431,7 @@ export const StartHub: React.FC<StartHubProps> = ({
             <button
               type="button"
               onClick={onResumeWorkspace}
-              className="text-left rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] hover:border-indigo-500/70 p-4 flex flex-col justify-between gap-3 studio-card-highlight transition-all cursor-pointer group"
+              className="text-left rounded-[16px] border border-[var(--studio-border)] bg-[var(--studio-surface)] hover:border-[var(--studio-accent)]/60 hover:-translate-y-0.5 hover:shadow-[var(--studio-shadow)] p-4 flex flex-col justify-between gap-3 studio-panel-shadow transition-all duration-200 cursor-pointer group"
             >
               <div className="flex items-center justify-between">
                 <span className="w-8 h-8 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-500">
@@ -456,7 +456,7 @@ export const StartHub: React.FC<StartHubProps> = ({
             <button
               type="button"
               onClick={() => onSelectTemplate('blank-canvas')}
-              className="text-left rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)] hover:border-[var(--studio-border-strong)] hover:bg-[var(--studio-elevated)] p-4 flex flex-col justify-between gap-3 studio-card-highlight transition-all cursor-pointer group"
+              className="text-left rounded-[16px] border border-[var(--studio-border)] bg-[var(--studio-surface)] hover:border-[var(--studio-border-strong)] hover:bg-[var(--studio-elevated)] hover:-translate-y-0.5 hover:shadow-[var(--studio-shadow)] p-4 flex flex-col justify-between gap-3 studio-panel-shadow transition-all duration-200 cursor-pointer group"
             >
               <div className="flex items-center justify-between">
                 <span className="w-8 h-8 rounded-lg bg-[var(--studio-elevated)] border border-[var(--studio-border)] flex items-center justify-center text-[var(--studio-text-strong)]">
@@ -476,7 +476,7 @@ export const StartHub: React.FC<StartHubProps> = ({
             </button>
 
             {/* 3. Open Local Folder or Files */}
-            <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)] p-4 flex flex-col justify-between gap-3 studio-card-highlight">
+            <div className="rounded-[16px] border border-[var(--studio-border)] bg-[var(--studio-surface)] p-4 flex flex-col justify-between gap-3 studio-panel-shadow transition-all duration-200 hover:border-[var(--studio-border-strong)]">
               <div className="flex items-center justify-between">
                 <span className="w-8 h-8 rounded-lg bg-[var(--studio-elevated)] border border-[var(--studio-border)] flex items-center justify-center text-cyan-500">
                   <FolderOpen className="w-4 h-4" strokeWidth={1.5} />
@@ -509,7 +509,7 @@ export const StartHub: React.FC<StartHubProps> = ({
             </div>
 
             {/* 4. GitHub Repositories (Direct OAuth primary, URL secondary) */}
-            <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)] p-4 flex flex-col justify-between gap-2.5 studio-card-highlight">
+            <div className="rounded-[16px] border border-[var(--studio-border)] bg-[var(--studio-surface)] p-4 flex flex-col justify-between gap-2.5 studio-panel-shadow transition-all duration-200 hover:border-[var(--studio-border-strong)]">
               <div className="flex items-center justify-between gap-2">
                 <span className="w-8 h-8 rounded-lg bg-[var(--studio-elevated)] border border-[var(--studio-border)] flex items-center justify-center text-emerald-500 shrink-0">
                   <GitBranch className="w-4 h-4" strokeWidth={1.5} />
@@ -890,7 +890,7 @@ export const StartHub: React.FC<StartHubProps> = ({
                       onClick={() => setSelectedCategory(category)}
                       className={`h-7 px-2.5 rounded-md text-[11.5px] font-medium cursor-pointer transition-colors ${
                         active
-                          ? 'bg-indigo-600 text-white shadow-xs'
+                          ? 'bg-gradient-to-b from-indigo-500 to-indigo-600 text-white shadow-[0_2px_10px_-4px_rgba(20,163,146,0.9)]'
                           : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
                       }`}
                     >
@@ -925,7 +925,7 @@ export const StartHub: React.FC<StartHubProps> = ({
                 return (
                   <article
                     key={tpl.id}
-                    className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)] hover:border-indigo-500/60 overflow-hidden flex flex-col studio-card-highlight transition-all group"
+                    className="rounded-[18px] border border-[var(--studio-border)] bg-[var(--studio-surface)] hover:border-[var(--studio-accent)]/60 hover:-translate-y-0.5 hover:shadow-[var(--studio-shadow)] overflow-hidden flex flex-col studio-panel-shadow transition-all duration-200 group"
                   >
                     <TemplateWireframePreview templateId={tpl.id} />
                     <div className="p-4 flex-1 flex flex-col justify-between gap-3">
@@ -948,7 +948,7 @@ export const StartHub: React.FC<StartHubProps> = ({
                       <button
                         type="button"
                         onClick={() => onSelectTemplate(tpl.id)}
-                        className="w-full h-8 rounded-lg border border-[var(--studio-border-strong)] bg-[var(--studio-elevated)] group-hover:bg-indigo-600 group-hover:text-white group-hover:border-indigo-500 text-[12px] font-semibold text-[var(--studio-text-strong)] inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        className="w-full h-8 rounded-[10px] border border-[var(--studio-border-strong)] bg-[var(--studio-elevated)] group-hover:bg-gradient-to-b group-hover:from-indigo-500 group-hover:to-indigo-700 group-hover:text-white group-hover:border-indigo-500/70 text-[12px] font-semibold text-[var(--studio-text-strong)] inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                       >
                         <span>Use Template</span>
                         <ArrowRight className="w-3.5 h-3.5" strokeWidth={1.5} />

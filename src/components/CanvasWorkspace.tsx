@@ -1261,7 +1261,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   };
 
   return (
-    <main className="flex-1 min-w-0 flex flex-col bg-[var(--studio-bg)] min-h-0 overflow-x-hidden">
+    <main className="flex-1 min-w-0 flex flex-col rounded-[14px] border border-[var(--studio-border)] bg-[var(--studio-surface)] studio-panel-shadow min-h-0 overflow-x-hidden">
       {/* Workspace Sub-Toolbar */}
       <div className="h-9 shrink-0 border-b border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 flex items-center justify-between gap-2">
         <div
@@ -1312,7 +1312,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                     title="Quick Insert Component"
                     className={`inline-flex items-center gap-1 h-7 px-2.5 rounded-md border text-[11.5px] font-semibold studio-pressable whitespace-nowrap cursor-pointer ${
                       quickAddOpen
-                        ? 'bg-gradient-to-b from-blue-500 to-indigo-600 text-white border-indigo-400/40 shadow-[0_0_14px_rgba(99,102,241,0.35)]'
+                        ? 'bg-gradient-to-b from-blue-500 to-indigo-600 text-white border-indigo-400/40 shadow-[0_0_18px_rgba(20,163,146,0.4)]'
                         : 'bg-indigo-500/15 hover:bg-indigo-500/25 border-indigo-500/35 text-indigo-700 dark:text-indigo-300'
                     }`}
                   >
@@ -2188,7 +2188,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             style={{
               cursor: panDrag ? 'grabbing' : spacePressed ? 'grab' : 'default',
             }}
-            className="flex-1 min-h-0 relative overflow-hidden canvas-grid-bg select-none"
+            className="flex-1 min-h-0 relative overflow-hidden canvas-grid-bg rounded-b-[13px] select-none"
           >
             {!entryHtmlPath ? (
               <div className="w-full h-full flex items-center justify-center p-6">
@@ -2393,7 +2393,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         ) : (
         <div
           ref={stageScrollRef}
-          className="flex-1 min-h-0 overflow-auto builder-scroll canvas-grid-bg p-5 flex items-start"
+          className="flex-1 min-h-0 overflow-auto builder-scroll canvas-grid-bg rounded-b-[13px] p-5 flex items-start"
         >
           {!entryHtmlPath ? (
             <div className="m-auto max-w-md text-center bg-[var(--studio-surface)] border border-[var(--studio-border)] studio-card-highlight rounded-2xl p-6 shadow-xl">

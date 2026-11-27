@@ -3,6 +3,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import { editElementWithGemini } from './serverAi.ts';
+import {
+  getTurnstileConfig,
+  turnstileFailureMessage,
+  turnstileFailureStatus,
+  verifyTurnstileToken,
+} from './serverTurnstile.ts';
+import {
+  applySecurityHeaders,
+  enforceSameOriginForMutations,
+  resolveTrustedOrigins,
+} from './serverSecurity.ts';
 import { bundleProjectFiles } from './serverBundler.ts';
 import {
   exchangeGitHubOAuthCode,
@@ -28,6 +39,7 @@ import {
 import type { GitHubUserProfile } from './src/utils/githubSync.ts';
 import {
   createSlidingWindowRateLimiter,
+  isValidGitHubUsername,
   validateAiEditElementPayload,
   validateBundleProjectPayload,
   validateGithubOAuthExchangePayload,
@@ -41,6 +53,15 @@ interface GitHubSessionRecord {
   expiresAt: number;
 }
 
+const MAX_GITHUB_SEARCH_QUERY_LEN = 100;
+
+/** Trims, strips control characters and caps repository search terms. */
+function sanitizeSearchQuery(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return cleaned ? cleaned.slice(0, MAX_GITHUB_SEARCH_QUERY_LEN) : undefined;
+}
+
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const GITHUB_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -49,7 +70,17 @@ async function startServer() {
   const port = Number(process.env.PORT) || 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
+  app.disable('x-powered-by');
+  app.use(applySecurityHeaders(!isProd));
   app.use(express.json({ limit: '50mb' }));
+  // No CORS wildcard exists; state-changing browser requests must be same-origin
+  // (or come from the configured app/OAuth origins).
+  app.use(
+    '/api',
+    enforceSameOriginForMutations(
+      resolveTrustedOrigins(process.env.APP_URL, process.env.GITHUB_OAUTH_CALLBACK_URL)
+    )
+  );
 
   const oauthStateStore = new OAuthStateStore(OAUTH_STATE_TTL_MS);
   const pkceExchangeStore = new PendingPkceExchangeStore(5 * 60 * 1000);
@@ -123,6 +154,32 @@ async function startServer() {
   const resolveEffectiveGitHubToken = (req: express.Request, explicitPat?: string): string | undefined =>
     resolveGitHubAuth(req, explicitPat).token;
 
+  // Structured request logging: logs method, path, status, IP, and duration.
+  // Sensitive query/body params are never logged.
+  const startRequestLog = (req: express.Request) => {
+    const startTime = Date.now();
+    return (res: express.Response) => {
+      const durationMs = Date.now() - startTime;
+      const status = res.statusCode;
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const safePath = req.path.length > 200 ? req.path.slice(0, 200) + '…' : req.path;
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(),
+        method: req.method,
+        path: safePath,
+        status,
+        ip,
+        durationMs,
+        userAgent: (req.headers['user-agent'] || '').slice(0, 120),
+      }));
+    };
+  };
+
+  app.use((req, res, next) => {
+    res.on('finish', startRequestLog(req));
+    next();
+  });
+
   const bundleRateLimiter = createSlidingWindowRateLimiter({
     maxRequests: 60,
     windowMs: 60_000,
@@ -164,6 +221,19 @@ async function startServer() {
     res.status(404).send('esbuild.wasm not found');
   });
 
+  // Public bot-protection config: the Turnstile site key is public by design,
+  // the secret key is only ever read here on the server.
+  app.get('/api/security/status', (_req, res) => {
+    const turnstile = getTurnstileConfig();
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      turnstile: {
+        enabled: turnstile.enabled,
+        siteKey: turnstile.enabled ? turnstile.siteKey : '',
+      },
+    });
+  });
+
   app.post('/api/bundle-project', async (req, res) => {
     if (!enforceRateLimit(bundleRateLimiter, req, res)) return;
     try {
@@ -186,6 +256,18 @@ async function startServer() {
       const validated = validateAiEditElementPayload(req.body);
       if (!validated.ok) {
         res.status(400).json({ ok: false, error: validated.error });
+        return;
+      }
+
+      // Public, unauthenticated AI trigger: verify the Turnstile challenge before
+      // spending any model budget. Tokens are single-use and verified server-side.
+      const remoteIp = req.ip || req.socket.remoteAddress || undefined;
+      const botCheck = await verifyTurnstileToken(validated.data.captchaToken, remoteIp);
+      if (!botCheck.ok) {
+        res.status(turnstileFailureStatus(botCheck.reason)).json({
+          ok: false,
+          error: turnstileFailureMessage(botCheck.reason),
+        });
         return;
       }
 
@@ -332,7 +414,9 @@ async function startServer() {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-XSS-Protection', '0');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
 
     const sendCallbackPage = (
       statusCode: number,
@@ -646,7 +730,7 @@ async function startServer() {
         });
         return;
       }
-      const query = typeof req.query.q === 'string' ? req.query.q : undefined;
+      const query = sanitizeSearchQuery(req.query.q);
       const result = await listAuthenticatedGitHubRepos(token, query);
       res.status(result.ok ? 200 : result.requiresAuth ? 401 : 400).json(result);
     } catch (err) {
@@ -657,9 +741,13 @@ async function startServer() {
 
   app.get('/api/github/users/:username/repos', async (req, res) => {
     if (!enforceRateLimit(githubRateLimiter, req, res)) return;
+    if (!isValidGitHubUsername(req.params.username)) {
+      res.status(400).json({ ok: false, error: 'Invalid GitHub username.' });
+      return;
+    }
     try {
       const token = resolveEffectiveGitHubToken(req);
-      const query = typeof req.query.q === 'string' ? req.query.q : undefined;
+      const query = sanitizeSearchQuery(req.query.q);
       const result = await listPublicGitHubReposByUsername(req.params.username, query, token);
       res.status(result.ok ? 200 : 400).json(result);
     } catch (err) {
@@ -712,13 +800,16 @@ async function startServer() {
         req,
         validated.data.token
       );
-      if (!effectiveToken && sessionExpired) {
+      // Every write requires an authenticated caller; the server never writes
+      // with its own GITHUB_TOKEN fallback on behalf of anonymous requests.
+      if (!effectiveToken) {
         res.status(401).json({
           ok: false,
           requiresAuth: true,
-          sessionExpired: true,
-          error:
-            'Your GitHub session expired (for example after a server restart). Reconnect GitHub or paste a Personal Access Token to push commits.',
+          sessionExpired,
+          error: sessionExpired
+            ? 'Your GitHub session expired (for example after a server restart). Reconnect GitHub or paste a Personal Access Token to push commits.'
+            : 'Connect your GitHub account or paste a Personal Access Token with repo write access to push commits.',
         });
         return;
       }

@@ -189,7 +189,7 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
     <aside
       data-testid="right-sidebar"
       style={{ width: `${widthPx}px` }}
-      className="shrink-0 border-l border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col min-h-0"
+      className="shrink-0 border border-[var(--studio-border)] rounded-[14px] bg-[var(--studio-surface)] studio-panel-shadow flex flex-col min-h-0"
     >
       {/* Active tab keeps visible label; non-active tabs are icon-only revealing label on hover */}
       <div className="h-9 px-2.5 border-b border-[var(--studio-border)] flex items-center justify-between gap-1.5 shrink-0">

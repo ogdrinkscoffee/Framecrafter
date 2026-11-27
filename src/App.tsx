@@ -1,4 +1,96 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+interface RootErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface RootErrorBoundaryState {
+  hasError: boolean;
+  error: string | null;
+}
+
+class RootErrorBoundary extends React.Component<RootErrorBoundaryProps, RootErrorBoundaryState> {
+  state: RootErrorBoundaryState = { hasError: false, error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error instanceof Error ? error.message : String(error) };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('RootErrorBoundary caught an unhandled error:', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          role="alert"
+          className="h-screen w-screen overflow-hidden flex items-center justify-center bg-neutral-950 p-6 text-center"
+          style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
+        >
+          <div className="max-w-md">
+            <h1
+              style={{
+                fontSize: '18px',
+                fontWeight: 600,
+                color: '#e4e4e7',
+                margin: '0 0 12px',
+              }}
+            >
+              Something went wrong
+            </h1>
+            <p
+              style={{
+                fontSize: '14px',
+                color: '#a1a1aa',
+                lineHeight: 1.6,
+                margin: '0 0 16px',
+              }}
+            >
+              The editor hit an unexpected error and couldn't continue safely.
+              Reloading the page will restore your unsaved work from the last auto-save.
+            </p>
+            {this.state.error && (
+              <pre
+                style={{
+                  fontSize: '12px',
+                  color: '#f87171',
+                  backgroundColor: '#1f1111',
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  overflow: 'auto',
+                  maxHeight: '120px',
+                  margin: 0,
+                  fontFamily: 'ui-monospace, monospace',
+                }}
+              >
+                {this.state.error}
+              </pre>
+            )}
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              style={{
+                backgroundColor: '#4f46e5',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                padding: '8px 18px',
+                fontSize: '13px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Reload app
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 import { Blocks, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { CanvasWorkspace } from './components/CanvasWorkspace';
 import type { AiElementCopilotControls } from './components/AiElementBar';
@@ -131,6 +223,11 @@ import {
   upsertResponsiveStylesInCss,
 } from './utils/responsiveCss';
 import { SAMPLE_TEMPLATES } from './utils/sampleTemplates';
+import {
+  detectProjectTargets,
+  getDefaultTarget,
+  type ProjectTarget,
+} from './utils/projectTargets';
 import { updateHeadSeoMeta } from './utils/seoMeta';
 import {
   classifyViewportPresetFromWidth,
@@ -183,6 +280,14 @@ function resolveOriginFromUrl(rawUrl?: string | null): string {
 }
 
 export default function App() {
+  return (
+    <RootErrorBoundary>
+      <AppInner />
+    </RootErrorBoundary>
+  );
+}
+
+function AppInner() {
   const defaultTemplate = SAMPLE_TEMPLATES[0];
   const savedWorkspace = useMemo(() => loadWorkspaceFromStorage(), []);
   const initialStartupMode = useMemo(() => loadDefaultModePreference(), []);
@@ -199,6 +304,13 @@ export default function App() {
     return cloneProjectFiles(matchedTpl ? matchedTpl.files : startingFiles);
   });
   const [projectName, setProjectName] = useState(startingName);
+  // Multi-target workspace (Web + Mobile APK) detection for imported projects
+  const [projectTargets, setProjectTargets] = useState<ProjectTarget[]>(() =>
+    detectProjectTargets(startingFiles)
+  );
+  const [activeTargetId, setActiveTargetId] = useState<string | null>(
+    () => getDefaultTarget(detectProjectTargets(startingFiles))?.id ?? null
+  );
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(startingTemplateId);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(
     () => findEntryHtmlPath(startingFiles) ?? startingFiles[0]?.path ?? null
@@ -336,6 +448,21 @@ export default function App() {
   >(new Map());
 
   const files = history.present.files;
+
+  // Re-detect runnable targets whenever the workspace files change (import, pull, scaffold).
+  useEffect(() => {
+    const detected = detectProjectTargets(files);
+    setProjectTargets(detected);
+    setActiveTargetId((prev) =>
+      prev && detected.some((target) => target.id === prev) ? prev : getDefaultTarget(detected)?.id ?? null
+    );
+  }, [files]);
+
+  const activeTarget = useMemo(
+    () => projectTargets.find((target) => target.id === activeTargetId) ?? null,
+    [projectTargets, activeTargetId]
+  );
+
   const htmlPages = useMemo(
     () => files.filter((f) => f.type === 'html').map((f) => f.path),
     [files]
@@ -954,6 +1081,7 @@ export default function App() {
         if (viewportRef.current === 'all' && srcArtboard) {
           postToSiblingArtboards(srcArtboard, {
             type: 'HOVER_NODE_ID',
+            silentBadge: true,
             nodeId: data.nodeKey ?? null,
             veId: data.veId ?? null,
             rtId: data.rtId ?? null,
@@ -1004,6 +1132,7 @@ export default function App() {
           });
         }
 
+        postToIframe({ type: 'CLEAR_RESPONSIVE_PREVIEW' }, 'all');
         setSelectedElement(nextEl);
         setRightPanelTab('inspector');
         if (preserveNextAiExplanationRef.current) {
@@ -1055,6 +1184,7 @@ export default function App() {
         }
         selectedOriginalTextRef.current = '';
         resetAiCopilotState(false);
+        postToIframe({ type: 'CLEAR_RESPONSIVE_PREVIEW' }, 'all');
         setSelectedElement(null);
         if (viewportRef.current === 'all') {
           postToSiblingArtboards(srcArtboard, {
@@ -1088,6 +1218,19 @@ export default function App() {
           }
           return prev;
         });
+        return;
+      }
+
+      if (data.type === 'POSITION_PREVIEW' && data.styles) {
+        if (viewportRef.current === 'all' && srcArtboard) {
+          postToSiblingArtboards(srcArtboard, {
+            type: 'SYNC_NODE_STYLE',
+            veId: data.veId ?? null,
+            rtId: data.runtimeId ?? null,
+            uniqueSelector: data.uniqueSelector ?? null,
+            styles: data.styles,
+          });
+        }
         return;
       }
 
@@ -1304,15 +1447,29 @@ export default function App() {
         }
       }
       if (responsiveScope !== 'all') {
-        postToIframe(
-          { type: 'PREVIEW_STYLE', styles, important: true },
-          viewportRef.current === 'all' ? activeArtboardRef.current : undefined
-        );
+        // Preview the breakpoint override as a real @media rule in every artboard,
+        // so each artboard renders it only where its own width matches.
+        const previewSelector = selectedElement?.veId
+          ? `[data-ve-id="${selectedElement.veId}"]`
+          : selectedElement?.uniqueSelector || selectedElement?.selectorPath || null;
+        if (previewSelector) {
+          postToIframe(
+            {
+              type: 'PREVIEW_RESPONSIVE_STYLE',
+              selector: previewSelector,
+              scope: responsiveScope,
+              styles,
+            },
+            'all'
+          );
+        } else {
+          postToIframe({ type: 'PREVIEW_STYLE', styles, important: true }, 'all');
+        }
       } else {
         postToIframe({ type: 'PREVIEW_STYLE', styles }, 'all');
       }
     },
-    [postToIframe, responsiveScope]
+    [postToIframe, responsiveScope, selectedElement]
   );
 
   const handleCommitStyle = useCallback(
@@ -1362,6 +1519,7 @@ export default function App() {
           },
           'all'
         );
+        postToIframe({ type: 'CLEAR_RESPONSIVE_PREVIEW' }, 'all');
         return;
       }
 
@@ -1419,6 +1577,7 @@ export default function App() {
         },
         'all'
       );
+      postToIframe({ type: 'CLEAR_RESPONSIVE_PREVIEW' }, 'all');
     },
     [selectedElement, entryHtmlPath, primaryCssFile, files, postToIframe]
   );
@@ -2321,7 +2480,11 @@ export default function App() {
   }, []);
 
   const handleRunAiElementEdit = useCallback(
-    async (rawPromptText: string, quickLabel?: string) => {
+    async (
+      rawPromptText: string,
+      quickLabel?: string,
+      botProof?: { captchaToken?: string; honeypot?: string }
+    ) => {
       const trimmedPrompt = rawPromptText.trim();
       if (!trimmedPrompt) {
         setAiError('Describe how you want to edit the selected element.');
@@ -2377,6 +2540,8 @@ export default function App() {
             fileType: slice.fileType,
             ...(Object.keys(designTokens).length > 0 ? { designTokens } : {}),
             ...(slice.surroundingContext ? { surroundingContext: slice.surroundingContext } : {}),
+            ...(botProof?.captchaToken ? { captchaToken: botProof.captchaToken } : {}),
+            ...(botProof?.honeypot ? { honeypot: botProof.honeypot } : {}),
           }),
         });
 
@@ -2481,8 +2646,8 @@ export default function App() {
         setAiPromptDraft(next);
         if (aiError) setAiError(null);
       },
-      onSubmit: (promptText, label) => {
-        void handleRunAiElementEdit(promptText, label);
+      onSubmit: (promptText, label, botProof) => {
+        void handleRunAiElementEdit(promptText, label, botProof);
       },
       onCancel: handleCancelAiEdit,
       onClearFeedback: handleClearAiFeedback,
@@ -3829,7 +3994,19 @@ export default function App() {
   );
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden flex flex-col bg-[var(--studio-bg)] text-[var(--studio-text-strong)]">
+          <div id="main-content" tabIndex={-1} className="relative h-screen w-screen overflow-hidden flex flex-col gap-2 p-2 studio-shell text-[var(--studio-text-strong)] focus:outline-none">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only fixed left-4 top-4 z-50 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium shadow-lg focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
+        onClick={(e) => {
+          e.preventDefault();
+          const main = document.getElementById('main-content');
+          if (main) main.focus();
+        }}
+      >
+        Skip to main content
+      </a>
+
       <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 studio-grain" />
 
       {showStartHub ? (
@@ -3936,12 +4113,12 @@ export default function App() {
             onSwitchBranch={handleSwitchGithubBranch}
           />
 
-          <div className="flex-1 min-h-0 flex relative z-10">
+          <div className="flex-1 min-h-0 flex relative z-10 gap-1.5">
         {/* Transparent drag shield over iframe while resizing split panes */}
         {splitDrag && <div className="fixed inset-0 z-40 cursor-col-resize select-none" />}
 
         {leftSidebarCollapsed ? (
-          <div className="w-10 shrink-0 border-r border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col items-start gap-1.5 px-1.5 py-2 relative z-20">
+          <div className="w-10 shrink-0 border border-[var(--studio-border)] rounded-[14px] bg-[var(--studio-surface)] studio-panel-shadow flex flex-col items-start gap-1.5 px-1.5 py-2 relative z-20">
             <button
               type="button"
               onClick={() => {
@@ -4050,7 +4227,7 @@ export default function App() {
               }}
               style={{ cursor: 'col-resize' }}
               title="Drag to resize · Double-click to reset"
-              className="w-1 shrink-0 bg-transparent hover:bg-indigo-500/70 transition-colors z-50"
+              className="w-1.5 shrink-0 rounded-full bg-transparent hover:bg-[var(--studio-accent)]/70 transition-colors z-50"
             />
           </>
         )}
@@ -4114,7 +4291,7 @@ export default function App() {
         />
 
         {rightSidebarCollapsed ? (
-          <div className="w-10 shrink-0 border-l border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col items-end px-1.5 py-2 relative z-20">
+          <div className="w-10 shrink-0 border border-[var(--studio-border)] rounded-[14px] bg-[var(--studio-surface)] studio-panel-shadow flex flex-col items-end px-1.5 py-2 relative z-20">
             <button
               type="button"
               onClick={() => {
@@ -4150,7 +4327,7 @@ export default function App() {
               }}
               style={{ cursor: 'col-resize' }}
               title="Drag to resize · Double-click to reset"
-              className="w-1 shrink-0 bg-transparent hover:bg-indigo-500/70 transition-colors z-50"
+              className="w-1.5 shrink-0 rounded-full bg-transparent hover:bg-[var(--studio-accent)]/70 transition-colors z-50"
             />
             <RightStudioPanel
               widthPx={rightSidebarWidth}
@@ -4323,7 +4500,7 @@ export default function App() {
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3.5 py-1.5 rounded-full bg-[var(--studio-surface)] border border-[var(--studio-border-strong)] studio-card-highlight text-[11.5px] font-medium text-[var(--studio-text-strong)] shadow-2xl pointer-events-none whitespace-nowrap"
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-[var(--studio-surface)]/95 backdrop-blur-md border border-[var(--studio-border-strong)] ring-1 ring-[var(--studio-accent)]/25 studio-panel-shadow text-[11.5px] font-medium text-[var(--studio-text-strong)] pointer-events-none whitespace-nowrap"
         >
           {toastMessage}
         </div>
@@ -4331,3 +4508,4 @@ export default function App() {
     </div>
   );
 }
+

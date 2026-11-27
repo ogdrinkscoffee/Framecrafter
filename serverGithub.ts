@@ -552,9 +552,11 @@ export async function pushToGitHubRepo(params: {
     return { ok: false, error: parsed.error };
   }
 
+  // Writes never use the server's own GITHUB_TOKEN: that would let anonymous
+  // callers push to every repository the machine token can access. Pushes must
+  // be authenticated with the caller's OAuth session or personal token.
   const userToken = sanitizeGitHubToken(params.token);
-  const envToken = sanitizeGitHubToken(process.env.GITHUB_TOKEN);
-  const authToken = userToken || envToken;
+  const authToken = userToken;
   if (!authToken) {
     return {
       ok: false,

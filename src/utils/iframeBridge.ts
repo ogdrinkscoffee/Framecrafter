@@ -11,7 +11,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     outline-offset: 2px !important;
   }
   [data-ve-selected="true"] {
-    outline: 2px solid #6366f1 !important;
+    outline: 2px solid #14a392 !important;
     outline-offset: -1px !important;
   }
   [data-ve-selected="true"]:not([data-ve-editing="true"]) {
@@ -88,6 +88,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   }
 </style>
 <style data-ve-internal="live-responsive-css"></style>
+<style data-ve-internal="preview-responsive-css"></style>
 <style data-ve-internal="layout-outlines"></style>
 <div id="__ve_hover_badge" data-ve-internal="badge"></div>
 <div id="__ve_action_toast" data-ve-internal="action-toast" role="status"></div>
@@ -111,6 +112,8 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   var domTreeTimer = null;
   var outlinesEnabled = false;
   var liveResponsiveStyleEl = document.querySelector('style[data-ve-internal="live-responsive-css"]');
+  var previewResponsiveStyleEl = document.querySelector('style[data-ve-internal="preview-responsive-css"]');
+  var livePositionFrame = 0;
   var outlinesStyleEl = document.querySelector('style[data-ve-internal="layout-outlines"]');
   var moveDrag = null;
   var suppressNextClick = false;
@@ -597,6 +600,65 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     badge.style.left = left + 'px';
   }
 
+  function toKebabProp(prop) {
+    return String(prop || '').replace(/([A-Z])/g, '-$1').toLowerCase();
+  }
+
+  // Live @media preview: applies the in-progress override as a real media rule in
+  // every artboard, so each frame evaluates it against its own viewport width.
+  function applyResponsivePreviewCss(selector, scope, styles) {
+    if (!previewResponsiveStyleEl) return;
+    if (!selector) {
+      previewResponsiveStyleEl.textContent = '';
+      return;
+    }
+    var decls = [];
+    Object.keys(styles || {}).forEach(function(prop) {
+      var val = styles[prop];
+      if (val === null || val === undefined || val === '') return;
+      decls.push('  ' + toKebabProp(prop) + ': ' + val + ' !important;');
+    });
+    if (!decls.length) {
+      previewResponsiveStyleEl.textContent = '';
+      return;
+    }
+    var rule = selector + ' {\\n' + decls.join('\\n') + '\\n}';
+    if (scope === 'desktop') {
+      rule = '@media (min-width: 769px) {\\n' + rule + '\\n}';
+    } else if (scope === 'tablet') {
+      rule = '@media (max-width: 768px) and (min-width: 481px) {\\n' + rule + '\\n}';
+    } else if (scope === 'mobile') {
+      rule = '@media (max-width: 480px) {\\n' + rule + '\\n}';
+    }
+    previewResponsiveStyleEl.textContent = rule;
+  }
+
+  function clearResponsivePreview() {
+    if (previewResponsiveStyleEl) previewResponsiveStyleEl.textContent = '';
+  }
+
+  // Streams the in-flight drag position to the sibling artboards on the next frame.
+  function broadcastLivePosition() {
+    if (livePositionFrame) return;
+    livePositionFrame = window.requestAnimationFrame(function() {
+      livePositionFrame = 0;
+      if (!moveDrag || !moveDrag.dragging || !moveDrag.el) return;
+      var el = moveDrag.el;
+      postToParent('POSITION_PREVIEW', {
+        veId: el.getAttribute('data-ve-id') || null,
+        runtimeId: getRuntimeId(el),
+        uniqueSelector: buildUniqueCssSelector(el),
+        styles: {
+          position: el.style.position,
+          left: el.style.left,
+          top: el.style.top,
+          right: el.style.right,
+          bottom: el.style.bottom
+        }
+      });
+    });
+  }
+
   function selectElement(el, notifyParent) {
     if (selectedEl && selectedEl !== el) {
       selectedEl.removeAttribute('data-ve-selected');
@@ -747,6 +809,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     updateSnapGuides(moveDrag.el);
     positionBadge(moveDrag.el, 'Move · x: ' + nextLeft + 'px, y: ' + nextTop + 'px', '#3b82f6');
     notifyRectChange();
+    broadcastLivePosition();
   }, true);
 
   window.addEventListener('mouseup', function() {
@@ -1024,7 +1087,11 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
           if (hoveredEl !== selectedEl) {
             hoveredEl.setAttribute('data-ve-hovered', 'true');
           }
-          positionBadge(hoveredEl);
+          if (msg.silentBadge === true) {
+            if (badge) badge.style.display = 'none';
+          } else {
+            positionBadge(hoveredEl);
+          }
         }
       }
       return;
@@ -1103,6 +1170,18 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
     if (msg.type === 'LIVE_CSS_OVERRIDE' && liveResponsiveStyleEl) {
       liveResponsiveStyleEl.textContent = msg.cssText || '';
+      window.requestAnimationFrame(notifyRectChange);
+      return;
+    }
+
+    if (msg.type === 'PREVIEW_RESPONSIVE_STYLE') {
+      applyResponsivePreviewCss(msg.selector, msg.scope, msg.styles || {});
+      window.requestAnimationFrame(notifyRectChange);
+      return;
+    }
+
+    if (msg.type === 'CLEAR_RESPONSIVE_PREVIEW') {
+      clearResponsivePreview();
       window.requestAnimationFrame(notifyRectChange);
       return;
     }

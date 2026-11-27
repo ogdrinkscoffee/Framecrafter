@@ -210,7 +210,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
   return (
     <>
-      <header className="h-12 shrink-0 border-b border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 flex items-center justify-between gap-2 select-none relative z-30">
+      <header className="h-12 shrink-0 border border-[var(--studio-border)] rounded-[14px] bg-[var(--studio-surface)] studio-panel-shadow px-2.5 flex items-center justify-between gap-2 select-none relative z-30">
       {/* Left: Architectural Mark, Project Title & Icon-Only Loaders */}
       <div className="flex items-center gap-2 min-w-0">
         <HoverIconButton
@@ -284,7 +284,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
       {/* Center: Critical Mode Switch & Icon-Only Viewport Presets */}
       <div className="flex items-center gap-2 shrink-0">
         <div
-          className="inline-flex items-center h-8 p-0.5 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)]"
+          className="inline-flex items-center h-8 p-0.5 rounded-[10px] bg-[var(--studio-bg)] border border-[var(--studio-border)]"
           role="group"
           aria-label="Editor Mode"
         >
@@ -295,7 +295,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             title="Editing Mode (Ctrl+E)"
             className={`inline-flex items-center gap-1.5 h-full px-2.5 rounded-md text-[11.5px] font-semibold studio-pressable whitespace-nowrap shrink-0 cursor-pointer ${
               editorMode === 'edit'
-                ? 'bg-indigo-600 text-white shadow-xs'
+                ? 'bg-gradient-to-b from-indigo-500 to-indigo-600 text-white shadow-[0_2px_10px_-4px_rgba(20,163,146,0.9)]'
                 : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
             }`}
           >
@@ -309,7 +309,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             title="Using Mode (Ctrl+E)"
             className={`inline-flex items-center gap-1.5 h-full px-2.5 rounded-md text-[11.5px] font-semibold studio-pressable whitespace-nowrap shrink-0 cursor-pointer ${
               editorMode === 'interact'
-                ? 'bg-emerald-600 text-white shadow-xs'
+                ? 'bg-gradient-to-b from-emerald-500 to-emerald-600 text-white shadow-[0_2px_10px_-4px_rgba(16,185,129,0.8)]'
                 : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
             }`}
           >
@@ -319,7 +319,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         </div>
 
         <div
-          className="inline-flex items-center h-8 p-0.5 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)]"
+          className="inline-flex items-center h-8 p-0.5 rounded-[10px] bg-[var(--studio-bg)] border border-[var(--studio-border)]"
           role="group"
           aria-label="Viewport Width"
         >
@@ -623,7 +623,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             aria-expanded={exportMenuOpen}
             aria-label="Export options"
             title="Export ZIP, JSON, or PNG/SVG visual snapshot"
-            className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[11.5px] font-semibold text-white bg-indigo-600 hover:bg-indigo-500 border border-indigo-400/30 shadow-xs studio-pressable whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-[10px] text-[11.5px] font-semibold text-white bg-gradient-to-b from-indigo-500 to-indigo-700 hover:from-indigo-400 hover:to-indigo-600 border border-indigo-400/40 shadow-[0_8px_20px_-12px_rgba(20,163,146,0.95)] studio-pressable whitespace-nowrap shrink-0 cursor-pointer"
           >
             <Download className="w-3.5 h-3.5 shrink-0" strokeWidth={1.5} />
             <span>Export</span>

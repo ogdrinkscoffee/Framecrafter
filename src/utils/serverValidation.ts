@@ -1,5 +1,6 @@
 import type { BundleInputFile } from '../../serverBundler';
 import type { ProjectFile } from '../types/editor';
+import { parseGitHubRepoUrl } from './githubSync';
 
 const MAX_FILES_PER_REQUEST = 600;
 const MAX_PATH_LEN = 512;
@@ -8,6 +9,8 @@ const MAX_REPO_URL_LEN = 512;
 const MAX_BRANCH_LEN = 128;
 const MAX_COMMIT_MSG_LEN = 500;
 const MAX_TOKEN_LEN = 512;
+const MAX_TOTAL_PAYLOAD_BYTES = 40 * 1024 * 1024;
+const MAX_OAUTH_VALUE_LEN = 256;
 
 export type ValidationResult<T> =
   | { ok: true; data: T }
@@ -17,13 +20,40 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+
 function isSafePathString(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     value.trim().length > 0 &&
     value.length <= MAX_PATH_LEN &&
-    !value.includes('\0')
+    !CONTROL_CHAR_RE.test(value)
   );
+}
+
+function isAbsoluteRepoPath(value: string): boolean {
+  const normalized = value.replace(/\\/g, '/');
+  return (
+    normalized.startsWith('/') ||
+    normalized.startsWith('//') ||
+    /^[A-Za-z]:\//.test(normalized)
+  );
+}
+
+function hasTraversalSegments(value: string): boolean {
+  return value
+    .replace(/\\/g, '/')
+    .split('/')
+    .some((segment) => segment === '..' || segment === '.');
+}
+
+/** Repository-relative path that cannot escape the repo or collide with git metadata. */
+function isSafeRepoRelativePath(value: unknown): value is string {
+  if (!isSafePathString(value)) return false;
+  const normalized = value.replace(/\\/g, '/');
+  if (isAbsoluteRepoPath(normalized) || hasTraversalSegments(normalized)) return false;
+  const firstSegment = normalized.split('/')[0].toLowerCase();
+  return firstSegment !== '.git';
 }
 
 function validateBranchString(value: unknown): ValidationResult<string | undefined> {
@@ -49,7 +79,7 @@ export function validateBundleProjectPayload(
   if (!isPlainObject(raw)) {
     return { ok: false, error: 'Invalid request body.' };
   }
-  if (!isSafePathString(raw.entryPath)) {
+  if (!isSafePathString(raw.entryPath) || CONTROL_CHAR_RE.test(raw.entryPath)) {
     return { ok: false, error: 'Invalid bundle request: entryPath is required.' };
   }
   if (!Array.isArray(raw.files) || raw.files.length === 0) {
@@ -60,25 +90,44 @@ export function validateBundleProjectPayload(
   }
 
   const normalizedFiles: BundleInputFile[] = [];
+  const seenPaths = new Set<string>();
+  let totalBytes = 0;
   for (const item of raw.files) {
     if (!isPlainObject(item) || !isSafePathString(item.path) || typeof item.content !== 'string') {
       return { ok: false, error: 'Each bundled file must include valid string path and content.' };
     }
+    const path = item.path.trim();
+    if (seenPaths.has(path)) {
+      return { ok: false, error: `Duplicate file path in bundle request: "${path}".` };
+    }
+    seenPaths.add(path);
     if (item.content.length > MAX_SINGLE_FILE_BYTES) {
-      return { ok: false, error: `File "${item.path}" exceeds maximum allowed size.` };
+      return { ok: false, error: `File "${path}" exceeds maximum allowed size.` };
+    }
+    totalBytes += item.content.length;
+    if (totalBytes > MAX_TOTAL_PAYLOAD_BYTES) {
+      return { ok: false, error: 'Bundle request exceeds the maximum total payload size.' };
     }
     normalizedFiles.push({
-      path: item.path,
+      path,
       content: item.content,
       type: typeof item.type === 'string' ? (item.type as BundleInputFile['type']) : undefined,
     });
+  }
+
+  const entryPath = raw.entryPath.trim();
+  const normalizeForMatch = (value: string) =>
+    value.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  const entryForMatch = normalizeForMatch(entryPath);
+  if (!normalizedFiles.some((file) => normalizeForMatch(file.path) === entryForMatch)) {
+    return { ok: false, error: 'Invalid bundle request: entryPath must reference one of the provided files.' };
   }
 
   return {
     ok: true,
     data: {
       files: normalizedFiles,
-      entryPath: raw.entryPath.trim(),
+      entryPath,
     },
   };
 }
@@ -96,6 +145,10 @@ export function validateGithubPullPayload(
   ) {
     return { ok: false, error: 'A valid repository URL is required.' };
   }
+  const repoUrl = raw.repoUrl.trim();
+  if (!parseGitHubRepoUrl(repoUrl).ok) {
+    return { ok: false, error: 'A valid GitHub repository URL or owner/repo is required.' };
+  }
   const branchCheck = validateBranchString(raw.branch);
   if (!branchCheck.ok) {
     return branchCheck;
@@ -107,7 +160,7 @@ export function validateGithubPullPayload(
   return {
     ok: true,
     data: {
-      repoUrl: raw.repoUrl.trim(),
+      repoUrl,
       branch: branchCheck.data,
       token: typeof raw.token === 'string' && raw.token.trim() ? raw.token.trim() : undefined,
     },
@@ -143,28 +196,43 @@ export function validateGithubPushPayload(raw: unknown): ValidationResult<{
   }
 
   const validatedFiles: ProjectFile[] = [];
+  const seenPaths = new Set<string>();
+  let totalBytes = 0;
   for (const item of record.files) {
     if (
       !isPlainObject(item) ||
-      !isSafePathString(item.path) ||
+      !isSafeRepoRelativePath(item.path) ||
       typeof item.content !== 'string'
     ) {
-      return { ok: false, error: 'Every pushed file must have a valid path and content.' };
+      return {
+        ok: false,
+        error:
+          'Every pushed file must have a repository-relative path (no absolute paths, ".." segments, or .git entries) and string content.',
+      };
     }
+    const path = item.path.trim();
+    if (seenPaths.has(path)) {
+      return { ok: false, error: `Duplicate file path in push request: "${path}".` };
+    }
+    seenPaths.add(path);
     if (item.content.length > MAX_SINGLE_FILE_BYTES) {
-      return { ok: false, error: `File "${item.path}" exceeds maximum allowed push size.` };
+      return { ok: false, error: `File "${path}" exceeds maximum allowed push size.` };
+    }
+    totalBytes += item.content.length;
+    if (totalBytes > MAX_TOTAL_PAYLOAD_BYTES) {
+      return { ok: false, error: 'Push request exceeds the maximum total payload size.' };
     }
     const safeName =
       typeof item.name === 'string' && item.name.trim()
         ? item.name.trim().slice(0, MAX_PATH_LEN)
-        : item.path.split('/').pop() || item.path;
+        : path.split('/').pop() || path;
     const safeType =
       typeof item.type === 'string' && ALLOWED_FILE_TYPES.has(item.type)
         ? (item.type as ProjectFile['type'])
         : 'other';
 
     validatedFiles.push({
-      path: item.path,
+      path,
       name: safeName,
       content: item.content,
       type: safeType,
@@ -238,12 +306,22 @@ export function validateGithubOAuthExchangePayload(raw: unknown): ValidationResu
   if (!/^[A-Za-z0-9\-._~]{43,128}$/.test(codeVerifier)) {
     return { ok: false, error: 'Invalid PKCE code_verifier format.' };
   }
-  const exchangeToken =
-    typeof raw.exchangeToken === 'string' && raw.exchangeToken.trim()
-      ? raw.exchangeToken.trim()
-      : undefined;
-  const state =
-    typeof raw.state === 'string' && raw.state.trim() ? raw.state.trim() : undefined;
+  const readOpaqueValue = (value: unknown): string | undefined | null => {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return undefined;
+    if (trimmed.length > MAX_OAUTH_VALUE_LEN || CONTROL_CHAR_RE.test(trimmed)) return null;
+    return trimmed;
+  };
+  const exchangeToken = readOpaqueValue(raw.exchangeToken);
+  if (exchangeToken === null) {
+    return { ok: false, error: 'Invalid OAuth verification token.' };
+  }
+  const state = readOpaqueValue(raw.state);
+  if (state === null) {
+    return { ok: false, error: 'Invalid OAuth state value.' };
+  }
 
   if (!exchangeToken && !state) {
     return {
@@ -280,6 +358,13 @@ export function validateGithubOAuthExchangePayload(raw: unknown): ValidationResu
   };
 }
 
+const GITHUB_USERNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+/** GitHub usernames: alphanumeric with single hyphens, max 39 chars. */
+export function isValidGitHubUsername(value: unknown): value is string {
+  return typeof value === 'string' && GITHUB_USERNAME_RE.test(value.trim());
+}
+
 export type AiEditFileType = 'html' | 'tsx' | 'jsx' | 'css';
 
 export interface AiEditElementPayload {
@@ -288,6 +373,19 @@ export interface AiEditElementPayload {
   fileType: AiEditFileType;
   designTokens?: Record<string, string>;
   surroundingContext?: string;
+  /** Cloudflare Turnstile token; required only when the server has Turnstile enabled. */
+  captchaToken?: string;
+}
+
+const MAX_AI_MINUTES_PER_HOUR = 15;
+
+const MAX_CAPTCHA_TOKEN_LEN = 2048;
+
+/** Honeypot fields must stay empty; a filled value is treated as a bot submission. */
+export function hasFilledHoneypot(raw: unknown): boolean {
+  if (!isPlainObject(raw)) return false;
+  const value = raw.honeypot ?? raw.website_url;
+  return typeof value === 'string' ? value.trim().length > 0 : value !== undefined && value !== null;
 }
 
 const ALLOWED_AI_FILE_TYPES = new Set<AiEditFileType>(['html', 'tsx', 'jsx', 'css']);
@@ -301,6 +399,20 @@ export function validateAiEditElementPayload(
 ): ValidationResult<AiEditElementPayload> {
   if (!isPlainObject(raw)) {
     return { ok: false, error: 'Invalid request body.' };
+  }
+
+  if (hasFilledHoneypot(raw)) {
+    // Generic message: never tell a bot which check failed.
+    return { ok: false, error: 'Request rejected.' };
+  }
+
+  let captchaToken: string | undefined;
+  if (raw.captchaToken !== undefined && raw.captchaToken !== null) {
+    if (typeof raw.captchaToken !== 'string' || raw.captchaToken.length > MAX_CAPTCHA_TOKEN_LEN) {
+      return { ok: false, error: 'Request rejected.' };
+    }
+    const trimmedToken = raw.captchaToken.trim();
+    if (trimmedToken) captchaToken = trimmedToken;
   }
 
   if (typeof raw.prompt !== 'string') {
@@ -359,8 +471,8 @@ export function validateAiEditElementPayload(
       if (typeof v !== 'string') {
         return { ok: false, error: 'Every designTokens entry must map to a string value.' };
       }
-      const cleanKey = k.trim().slice(0, 80);
-      const cleanVal = v.trim().slice(0, 200);
+      const cleanKey = k.trim().replace(/[\r\n]/g, '').slice(0, 80);
+      const cleanVal = v.trim().replace(/[\r\n]/g, ' ').slice(0, 200);
       if (cleanKey && cleanVal) {
         cleanTokens[cleanKey] = cleanVal;
       }
@@ -392,6 +504,7 @@ export function validateAiEditElementPayload(
       fileType,
       ...(designTokens ? { designTokens } : {}),
       ...(surroundingContext ? { surroundingContext } : {}),
+      ...(captchaToken ? { captchaToken } : {}),
     },
   };
 }

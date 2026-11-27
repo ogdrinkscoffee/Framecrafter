@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -6,6 +6,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
+import { TurnstileGate, type BotProof } from './TurnstileGate';
 
 export interface AiQuickChip {
   id: 'improve-hierarchy' | 'make-responsive' | 'fix-contrast-a11y';
@@ -40,7 +41,7 @@ export interface AiElementCopilotControls {
   error: string | null;
   explanation: string | null;
   onChangePrompt: (next: string) => void;
-  onSubmit: (promptText: string, label?: string) => void;
+  onSubmit: (promptText: string, label?: string, botProof?: BotProof) => void;
   onCancel: () => void;
   onClearFeedback: () => void;
 }
@@ -69,12 +70,27 @@ export const AiElementBar: React.FC<AiElementBarProps> = ({
     onClearFeedback,
   } = copilot;
 
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [honeypot, setHoneypot] = useState('');
+  const [captchaRequired, setCaptchaRequired] = useState(false);
+  const [captchaResetSignal, setCaptchaResetSignal] = useState(0);
+
+  // Tokens are single-use: discard and re-challenge after a failed submission.
+  useEffect(() => {
+    if (!error) return;
+    setCaptchaToken(null);
+    setCaptchaResetSignal((prev) => prev + 1);
+  }, [error]);
+
+  const botProof: BotProof = { captchaToken: captchaToken ?? undefined, honeypot };
+  const needsCaptcha = captchaRequired && !captchaToken;
+
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (loading) return;
+    if (loading || needsCaptcha) return;
     const trimmed = prompt.trim();
     if (!trimmed) return;
-    onSubmit(trimmed);
+    onSubmit(trimmed, undefined, botProof);
   };
 
   const isFloating = variant === 'floating';
@@ -126,6 +142,13 @@ export const AiElementBar: React.FC<AiElementBarProps> = ({
         </div>
       </div>
 
+      <TurnstileGate
+        onTokenChange={setCaptchaToken}
+        onHoneypotChange={setHoneypot}
+        onStatusChange={setCaptchaRequired}
+        resetSignal={captchaResetSignal}
+      />
+
       <form onSubmit={handleFormSubmit} className="flex items-center gap-1.5">
         <input
           type="text"
@@ -139,7 +162,7 @@ export const AiElementBar: React.FC<AiElementBarProps> = ({
         />
         <button
           type="submit"
-          disabled={loading || !prompt.trim()}
+          disabled={loading || needsCaptcha || !prompt.trim()}
           aria-label="Apply AI edit"
           className="h-7 px-2.5 rounded-md bg-gradient-to-b from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 disabled:opacity-45 text-[11px] font-semibold text-white inline-flex items-center gap-1 studio-pressable cursor-pointer shrink-0"
         >
@@ -159,8 +182,8 @@ export const AiElementBar: React.FC<AiElementBarProps> = ({
           <button
             key={chip.id}
             type="button"
-            disabled={loading}
-            onClick={() => onSubmit(chip.prompt, chip.label)}
+            disabled={loading || needsCaptcha}
+            onClick={() => onSubmit(chip.prompt, chip.label, botProof)}
             className="h-6 px-2 rounded-md border border-[var(--studio-border)] bg-[var(--studio-surface)] hover:bg-[var(--studio-hover)] hover:border-[var(--studio-border-strong)] text-[10.5px] font-medium text-[var(--studio-text-secondary)] hover:text-[var(--studio-text-strong)] disabled:opacity-45 studio-pressable cursor-pointer whitespace-nowrap"
           >
             {chip.label}

@@ -103,7 +103,7 @@ export const ComponentLibraryDrawer: React.FC<ComponentLibraryDrawerProps> = ({
       data-testid="component-library-drawer"
       aria-label="Component Library Drawer"
       style={{ width: `${drawerWidth}px` }}
-      className="shrink-0 border-r border-[var(--studio-border)] bg-[var(--studio-surface)] flex flex-col min-h-0"
+      className="shrink-0 border border-[var(--studio-border)] rounded-[14px] bg-[var(--studio-surface)] studio-panel-shadow flex flex-col min-h-0 overflow-hidden"
     >
       {/* Drawer Header */}
       <div className="h-9 px-3 border-b border-[var(--studio-border)] flex items-center justify-between gap-2 shrink-0">
