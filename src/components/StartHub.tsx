@@ -466,7 +466,7 @@ export const StartHub: React.FC<StartHubProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))] gap-3">
             {/* 1. Resume Current Workspace */}
             <button
               type="button"
@@ -917,7 +917,7 @@ export const StartHub: React.FC<StartHubProps> = ({
               <div
                 role="tablist"
                 aria-label="Template categories"
-                className="inline-flex items-center p-0.5 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border)]"
+                className="flex flex-wrap max-w-full items-center p-0.5 rounded-lg bg-[var(--studio-surface)] border border-[var(--studio-border)]"
               >
                 {TEMPLATE_CATEGORIES.map((category) => {
                   const active = selectedCategory === category;
@@ -928,7 +928,7 @@ export const StartHub: React.FC<StartHubProps> = ({
                       role="tab"
                       aria-selected={active}
                       onClick={() => setSelectedCategory(category)}
-                      className={`h-7 px-2.5 rounded-md text-[11.5px] font-medium cursor-pointer transition-colors ${
+                      className={`h-7 px-2.5 shrink-0 rounded-md text-[11.5px] font-medium cursor-pointer transition-colors ${
                         active
                           ? 'bg-gradient-to-b from-indigo-500 to-indigo-600 text-white shadow-[0_2px_10px_-4px_rgba(20,163,146,0.9)]'
                           : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
@@ -959,7 +959,7 @@ export const StartHub: React.FC<StartHubProps> = ({
               No templates match &ldquo;{searchQuery}&rdquo;.
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,280px),1fr))] gap-4">
               {filteredTemplates.map((tpl) => {
                 const category = tpl.category || 'Starter';
                 return (

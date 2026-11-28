@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
+import { FETCH_TIMEOUT_MS, fetchWithTimeout } from '../utils/fetchWithTimeout';
 
 interface TurnstileRenderOptions {
   sitekey: string;
@@ -66,7 +67,12 @@ function loadTurnstileScript(): Promise<boolean> {
 
 async function loadSecurityStatus(): Promise<SecurityStatus> {
   if (statusPromise) return statusPromise;
-  statusPromise = fetch('/api/security/status', { headers: { Accept: 'application/json' } })
+  statusPromise = fetchWithTimeout(
+    '/api/security/status',
+    { headers: { Accept: 'application/json' } },
+    FETCH_TIMEOUT_MS.probe,
+    'Bot protection check'
+  )
     .then(async (response) => {
       if (!response.ok) return { enabled: false, siteKey: '' };
       const data = (await response.json()) as {

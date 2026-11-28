@@ -224,7 +224,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 
   return (
     <>
-      <header className="h-12 shrink-0 border border-[var(--studio-border)] rounded-[14px] bg-[var(--studio-surface)] studio-panel-shadow px-2.5 flex items-center justify-between gap-2 select-none relative z-30">
+      <header className="h-12 shrink-0 border border-[var(--studio-border)] rounded-[14px] bg-[var(--studio-surface)] studio-panel-shadow px-2.5 flex items-center justify-between gap-2 select-none relative z-30 overflow-x-auto overflow-y-hidden builder-scroll">
       {/* Left: Architectural Mark, Project Title & Icon-Only Loaders */}
       <div className="flex items-center gap-2 min-w-0">
         <HoverIconButton

@@ -102,7 +102,7 @@ export const ProjectStatsModal: React.FC<ProjectStatsModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--studio-modal-backdrop)] backdrop-blur-sm p-4"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-[var(--studio-modal-backdrop)] backdrop-blur-sm p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Project Statistics"
@@ -111,7 +111,7 @@ export const ProjectStatsModal: React.FC<ProjectStatsModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden">
+      <div className="w-full max-w-3xl max-h-[90dvh] studio-modal-panel flex flex-col rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden">
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-[var(--studio-border)] flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -133,7 +133,7 @@ export const ProjectStatsModal: React.FC<ProjectStatsModalProps> = ({
 
           <div className="flex items-center gap-2 shrink-0">
             <div
-              className="inline-flex items-center p-0.5 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)]"
+              className="flex flex-wrap max-w-full items-center p-0.5 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)]"
               role="group"
               aria-label="Chart Metric"
             >

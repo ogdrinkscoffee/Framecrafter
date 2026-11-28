@@ -1198,7 +1198,7 @@ export const GitHubCommitModal: React.FC<GitHubCommitModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--studio-modal-backdrop)] backdrop-blur-sm p-4"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-[var(--studio-modal-backdrop)] backdrop-blur-sm p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="github-commit-modal-title"
@@ -1207,7 +1207,7 @@ export const GitHubCommitModal: React.FC<GitHubCommitModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] text-[var(--studio-text)] shadow-2xl studio-card-highlight overflow-hidden">
+      <div className="w-full max-w-md studio-modal-panel rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] text-[var(--studio-text)] shadow-2xl studio-card-highlight overflow-hidden">
         {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--studio-border)] bg-[var(--studio-elevated)] flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">

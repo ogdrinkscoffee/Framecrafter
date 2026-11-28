@@ -371,3 +371,92 @@
     center top,
     0 0;
 }
+
+/* ---------------------------------------------------------------------------
+ * Cross-resolution fluidity (320px → 2560px)
+ * These rules are intentionally unlayered: they must beat Tailwind's utility
+ * layer (e.g. `focus:outline-none` on icon buttons) without !important.
+ * ------------------------------------------------------------------------- */
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  /* Long unbroken strings (repo URLs, tokens, file paths) wrap instead of
+     forcing a panel wider than its column at narrow widths. */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  p,
+  li,
+  dd,
+  dt,
+  figcaption,
+  blockquote,
+  label,
+  code {
+    overflow-wrap: break-word;
+  }
+
+  img,
+  video {
+    max-width: 100%;
+    height: auto;
+  }
+
+  svg {
+    max-width: 100%;
+  }
+}
+
+/* Viewport height with a dvh upgrade so mobile browser chrome cannot crop the
+   shell. (Fallback first — unsupported browsers keep the vh value.) */
+.studio-shell-height {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Modal surfaces never exceed the viewport, at any width or height. */
+.studio-modal-panel {
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100dvh - 2rem);
+}
+
+/* Wide data tables scroll inside their own box instead of the page. */
+.studio-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Flex/grid children that hold text must be allowed to shrink below their
+   content width instead of pushing the row wider. */
+.studio-min-w-0 {
+  min-width: 0;
+}
+
+/* Display type that scales from 320px to 2560px without raw vw distortion. */
+.studio-fluid-display {
+  font-size: clamp(1.375rem, 1.05rem + 1.6vw, 2.75rem);
+  line-height: 1.15;
+  overflow-wrap: break-word;
+}
+
+/* Keyboard focus stays visible everywhere, including components that clear the
+   mouse outline with focus:outline-none. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--studio-accent);
+  outline-offset: 2px;
+}
+
+/* Touch targets remain tappable on narrow phones without changing the visual
+   rhythm on desktop. */
+@media (max-width: 640px) {
+  :where(button, [role='button']) {
+    min-height: 28px;
+  }
+}

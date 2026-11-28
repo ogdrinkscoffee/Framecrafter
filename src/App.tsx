@@ -1,101 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-interface RootErrorBoundaryProps {
-  children: React.ReactNode;
-}
-
-interface RootErrorBoundaryState {
-  hasError: boolean;
-  error: string | null;
-}
-
-class RootErrorBoundary extends React.Component<RootErrorBoundaryProps, RootErrorBoundaryState> {
-  state: RootErrorBoundaryState = { hasError: false, error: null };
-
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error: error instanceof Error ? error.message : String(error) };
-  }
-
-  componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error('RootErrorBoundary caught an unhandled error:', error, info);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div
-          role="alert"
-          className="h-screen w-screen overflow-hidden flex items-center justify-center bg-neutral-950 p-6 text-center"
-          style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}
-        >
-          <div className="max-w-md">
-            <h1
-              style={{
-                fontSize: '18px',
-                fontWeight: 600,
-                color: '#e4e4e7',
-                margin: '0 0 12px',
-              }}
-            >
-              Something went wrong
-            </h1>
-            <p
-              style={{
-                fontSize: '14px',
-                color: '#a1a1aa',
-                lineHeight: 1.6,
-                margin: '0 0 16px',
-              }}
-            >
-              The editor hit an unexpected error and couldn't continue safely.
-              Reloading the page will restore your unsaved work from the last auto-save.
-            </p>
-            {this.state.error && (
-              <pre
-                style={{
-                  fontSize: '12px',
-                  color: '#f87171',
-                  backgroundColor: '#1f1111',
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  overflow: 'auto',
-                  maxHeight: '120px',
-                  margin: 0,
-                  fontFamily: 'ui-monospace, monospace',
-                }}
-              >
-                {this.state.error}
-              </pre>
-            )}
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              style={{
-                backgroundColor: '#4f46e5',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 8,
-                padding: '8px 18px',
-                fontSize: '13px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Reload app
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
 import { Blocks, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { CanvasWorkspace } from './components/CanvasWorkspace';
 import type { AiElementCopilotControls } from './components/AiElementBar';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { ComponentLibraryDrawer } from './components/ComponentLibraryDrawer';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { FileExplorer } from './components/FileExplorer';
 import { GlobalFindReplaceModal } from './components/GlobalFindReplaceModal';
 import { ProjectStatsModal } from './components/ProjectStatsModal';
@@ -128,9 +38,11 @@ import {
   extractDesignTokensMap,
   extractElementSourceSlice,
 } from './utils/aiElementSync';
+import { useActionLock } from './utils/asyncLock';
 import { findElementSourceLocation, insertQuickComponentInProject } from './utils/codeSync';
 import { DRAGGABLE_COMPONENTS } from './utils/componentCatalog';
 import { deleteRootCssVariable, updateRootCssVariable } from './utils/cssVariables';
+import { FETCH_TIMEOUT_MS, describeFetchError, fetchWithTimeout } from './utils/fetchWithTimeout';
 import {
   exportPngSnapshot,
   exportProjectAsJson,
@@ -293,9 +205,9 @@ function resolveOriginFromUrl(rawUrl?: string | null): string {
 
 export default function App() {
   return (
-    <RootErrorBoundary>
+    <ErrorBoundary label="Framecraft editor" variant="root">
       <AppInner />
-    </RootErrorBoundary>
+    </ErrorBoundary>
   );
 }
 
@@ -389,6 +301,7 @@ function AppInner() {
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const aiAbortControllerRef = useRef<AbortController | null>(null);
+  const { begin: beginAction, end: endAction } = useActionLock();
   const preserveNextAiExplanationRef = useRef(false);
 
   // GitHub Sync & OAuth state (tokens kept strictly in component state memory, never persisted)
@@ -2760,7 +2673,7 @@ function AppInner() {
       const designTokens = extractDesignTokensMap(currentFiles, 60);
 
       try {
-        const response = await fetch('/api/ai/edit-element', {
+        const response = await fetchWithTimeout('/api/ai/edit-element', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
@@ -2773,7 +2686,7 @@ function AppInner() {
             ...(botProof?.captchaToken ? { captchaToken: botProof.captchaToken } : {}),
             ...(botProof?.honeypot ? { honeypot: botProof.honeypot } : {}),
           }),
-        });
+        }, FETCH_TIMEOUT_MS.llm, 'AI edit');
 
         let payload: { updatedCode?: unknown; explanation?: unknown; error?: unknown } = {};
         try {
@@ -2854,7 +2767,7 @@ function AppInner() {
           return;
         }
         setAiError(
-          err instanceof Error ? err.message : 'Network error while requesting AI edit.'
+          describeFetchError(err, 'Network error while requesting AI edit.')
         );
       } finally {
         if (aiAbortControllerRef.current === controller) {
@@ -3399,6 +3312,7 @@ function AppInner() {
         setGithubReposError('Enter a GitHub username to load public repositories.');
         return;
       }
+      if (!beginAction('github:browse')) return;
       setGithubReposLoading(true);
       setGithubReposError(null);
       try {
@@ -3408,9 +3322,9 @@ function AppInner() {
         } else if (githubToken.trim()) {
           headers['X-GitHub-Token'] = githubToken.trim();
         }
-        const res = await fetch(`/api/github/users/${encodeURIComponent(clean)}/repos`, {
+        const res = await fetchWithTimeout(`/api/github/users/${encodeURIComponent(clean)}/repos`, {
           headers,
-        });
+        }, FETCH_TIMEOUT_MS.read, 'GitHub repositories');
         const data = (await res.json()) as GitHubReposResponse;
         if (!res.ok || !data.ok) {
           setGithubReposError(data.error || `Could not load repositories for @${clean}.`);
@@ -3423,9 +3337,10 @@ function AppInner() {
         setGithubRepos(Array.isArray(data.repos) ? data.repos : []);
       } catch (err) {
         setGithubReposError(
-          err instanceof Error ? err.message : 'Network error browsing GitHub repositories.'
+          describeFetchError(err, 'Network error browsing GitHub repositories.')
         );
       } finally {
+        endAction('github:browse');
         setGithubReposLoading(false);
       }
     },
@@ -3443,6 +3358,7 @@ function AppInner() {
         return;
       }
 
+      if (!beginAction('github:refresh')) return;
       setGithubReposLoading(true);
       setGithubReposError(null);
       try {
@@ -3452,7 +3368,7 @@ function AppInner() {
         } else if (effectivePat) {
           headers['X-GitHub-Token'] = effectivePat;
         }
-        const res = await fetch('/api/github/repos', { headers });
+        const res = await fetchWithTimeout('/api/github/repos', { headers }, FETCH_TIMEOUT_MS.read, 'GitHub repositories');
         const data = (await res.json()) as GitHubReposResponse;
         if (!res.ok || !data.ok) {
           if (res.status === 401 && effectiveSession) {
@@ -3472,9 +3388,10 @@ function AppInner() {
         setGithubRepos(Array.isArray(data.repos) ? data.repos : []);
       } catch (err) {
         setGithubReposError(
-          err instanceof Error ? err.message : 'Network error loading GitHub repositories.'
+          describeFetchError(err, 'Network error loading GitHub repositories.')
         );
       } finally {
+        endAction('github:refresh');
         setGithubReposLoading(false);
       }
     },
@@ -3490,10 +3407,10 @@ function AppInner() {
         } else if (githubToken.trim()) {
           headers['X-GitHub-Token'] = githubToken.trim();
         }
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `/api/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`,
           { headers }
-        );
+        , FETCH_TIMEOUT_MS.read, 'GitHub branches');
         const data = (await res.json()) as GitHubBranchesResponse;
         return res.ok && data.ok && Array.isArray(data.branches) ? data.branches : [];
       } catch {
@@ -3508,7 +3425,7 @@ function AppInner() {
     const checkStatus = async () => {
       try {
         const originParam = encodeURIComponent(window.location.origin);
-        const res = await fetch(`/api/auth/github/status?origin=${originParam}`);
+        const res = await fetchWithTimeout(`/api/auth/github/status?origin=${originParam}`, {}, FETCH_TIMEOUT_MS.probe, 'GitHub status');
         if (!res.ok || !active) return;
         const data = (await res.json()) as GitHubAuthStatusResponse & {
           callbackOrigin?: string;
@@ -3565,7 +3482,7 @@ function AppInner() {
       codeVerifier: string
     ) => {
       try {
-        const exchangeRes = await fetch('/api/auth/github/exchange', {
+        const exchangeRes = await fetchWithTimeout('/api/auth/github/exchange', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -3575,7 +3492,7 @@ function AppInner() {
             ...(payload.state ? { state: payload.state } : {}),
             ...(payload.redirectUri ? { redirectUri: payload.redirectUri } : {}),
           }),
-        });
+        }, FETCH_TIMEOUT_MS.mutation, 'GitHub sign-in');
         const exchangeData = (await exchangeRes.json()) as {
           ok?: boolean;
           sessionToken?: string;
@@ -3600,7 +3517,7 @@ function AppInner() {
         void handleRefreshGitHubRepos(undefined, exchangeData.sessionToken);
       } catch (err) {
         const errMsg =
-          err instanceof Error ? err.message : 'Unable to exchange GitHub authorization code.';
+          describeFetchError(err, 'Unable to exchange GitHub authorization code.');
         setGithubReposError(errMsg);
         setGithubStatusError(errMsg);
       } finally {
@@ -3696,8 +3613,11 @@ function AppInner() {
       const originParam = encodeURIComponent(window.location.origin);
       const nonceParam = encodeURIComponent(clientNonce);
       const challengeParam = encodeURIComponent(codeChallenge);
-      const res = await fetch(
-        `/api/auth/github/url?origin=${originParam}&nonce=${nonceParam}&code_challenge=${challengeParam}&code_challenge_method=S256`
+      const res = await fetchWithTimeout(
+        `/api/auth/github/url?origin=${originParam}&nonce=${nonceParam}&code_challenge=${challengeParam}&code_challenge_method=S256`,
+        {},
+        FETCH_TIMEOUT_MS.read,
+        'GitHub connect'
       );
       const data = (await res.json()) as {
         ok?: boolean;
@@ -3756,12 +3676,13 @@ function AppInner() {
     } catch (err) {
       clearOAuthHandshake();
       setGithubReposError(
-        err instanceof Error ? err.message : 'Unable to start GitHub connection.'
+        describeFetchError(err, 'Unable to start GitHub connection.')
       );
     }
   }, [clearOAuthHandshake]);
 
   const handleDisconnectGitHub = useCallback(async () => {
+    if (!beginAction('github:disconnect')) return;
     const tokenToRevoke = githubSessionToken;
     setGithubSessionToken('');
     setGithubBrowseUsername('');
@@ -3772,20 +3693,22 @@ function AppInner() {
     setGithubStatusMessage(null);
     if (tokenToRevoke) {
       try {
-        await fetch('/api/auth/github/logout', {
+        await fetchWithTimeout('/api/auth/github/logout', {
           method: 'POST',
           headers: { Authorization: `Bearer ${tokenToRevoke}` },
-        });
+        }, FETCH_TIMEOUT_MS.probe, 'GitHub sign-out');
       } catch {
         // Ignore network errors during local logout
       }
     }
+    endAction('github:disconnect');
     showToast('Disconnected GitHub account');
-  }, [githubSessionToken, showToast]);
+  }, [githubSessionToken, showToast, beginAction, endAction]);
 
   // Pull & Push integration with GitHub (supports OAuth session or repo URL)
   const handlePullFromGitHub = useCallback(
     async (repoUrl: string, branch: string, token: string): Promise<boolean> => {
+      if (!beginAction('github:pull')) return false;
       setGithubBusyAction('pull');
       setGithubStatusError(null);
       setGithubStatusMessage(null);
@@ -3794,11 +3717,11 @@ function AppInner() {
         if (githubSessionToken) {
           headers.Authorization = `Bearer ${githubSessionToken}`;
         }
-        const res = await fetch('/api/github/pull', {
+        const res = await fetchWithTimeout('/api/github/pull', {
           method: 'POST',
           headers,
           body: JSON.stringify({ repoUrl, branch, token }),
-        });
+        }, FETCH_TIMEOUT_MS.mutation, 'GitHub pull');
         const data = (await res.json()) as {
           error?: string;
           requiresAuth?: boolean;
@@ -3889,10 +3812,11 @@ function AppInner() {
         return true;
       } catch (err) {
         setGithubStatusError(
-          err instanceof Error ? err.message : 'Network error pulling repository'
+          describeFetchError(err, 'Network error pulling repository')
         );
         return false;
       } finally {
+        endAction('github:pull');
         setGithubBusyAction(null);
       }
     },
@@ -3907,6 +3831,7 @@ function AppInner() {
       token: string,
       silent = false
     ): Promise<boolean> => {
+      if (!beginAction('github:push')) return false;
       if (!silent) {
         setGithubBusyAction('push');
         setGithubStatusError(null);
@@ -3917,7 +3842,7 @@ function AppInner() {
         if (githubSessionToken) {
           headers.Authorization = `Bearer ${githubSessionToken}`;
         }
-        const res = await fetch('/api/github/push', {
+        const res = await fetchWithTimeout('/api/github/push', {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -3932,7 +3857,7 @@ function AppInner() {
               type,
             })),
           }),
-        });
+        }, FETCH_TIMEOUT_MS.mutation, 'GitHub push');
         const data = (await res.json()) as {
           error?: string;
           requiresAuth?: boolean;
@@ -3977,10 +3902,11 @@ function AppInner() {
         return true;
       } catch (err) {
         setGithubStatusError(
-          err instanceof Error ? err.message : 'Network error pushing to GitHub'
+          describeFetchError(err, 'Network error pushing to GitHub')
         );
         return false;
       } finally {
+        endAction('github:push');
         if (!silent) {
           setGithubBusyAction(null);
         }
@@ -4224,7 +4150,7 @@ function AppInner() {
   );
 
   return (
-          <div id="main-content" tabIndex={-1} className="relative h-screen w-screen overflow-hidden flex flex-col gap-2 p-2 studio-shell text-[var(--studio-text-strong)] focus:outline-none">
+          <div id="main-content" tabIndex={-1} className="relative studio-shell-height w-full overflow-hidden flex flex-col gap-2 p-2 studio-shell text-[var(--studio-text-strong)] focus:outline-none">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only fixed left-4 top-4 z-50 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium shadow-lg focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-neutral-950"
@@ -4240,6 +4166,7 @@ function AppInner() {
       <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 studio-grain" />
 
       {showStartHub ? (
+        <ErrorBoundary label="Start hub">
         <StartHub
           templates={SAMPLE_TEMPLATES}
           currentProjectName={projectName}
@@ -4275,6 +4202,7 @@ function AppInner() {
           onFetchRepoBranches={handleFetchRepoBranches}
           onOpenShortcuts={() => setShortcutsModalOpen(true)}
         />
+        </ErrorBoundary>
       ) : (
         <>
           <TopToolbar
@@ -4354,9 +4282,10 @@ function AppInner() {
             onSwitchBranch={handleSwitchGithubBranch}
           />
 
+          <ErrorBoundary label="Editor workspace">
           <div className="flex-1 min-h-0 flex relative z-10 gap-1.5">
         {/* Transparent drag shield over iframe while resizing split panes */}
-        {splitDrag && <div className="fixed inset-0 z-40 cursor-col-resize select-none" />}
+        {splitDrag && <div className="fixed inset-0 z-30 cursor-col-resize select-none" />}
 
         {leftSidebarCollapsed ? (
           <div className="w-10 shrink-0 border border-[var(--studio-border)] rounded-[14px] bg-[var(--studio-surface)] studio-panel-shadow flex flex-col items-start gap-1.5 px-1.5 py-2 relative z-20">
@@ -4469,7 +4398,7 @@ function AppInner() {
               }}
               style={{ cursor: 'col-resize' }}
               title="Drag to resize · Double-click to reset"
-              className="w-1.5 shrink-0 rounded-full bg-transparent hover:bg-[var(--studio-accent)]/70 transition-colors z-50"
+              className="w-1.5 shrink-0 rounded-full bg-transparent hover:bg-[var(--studio-accent)]/70 transition-colors z-10"
             />
           </>
         )}
@@ -4573,7 +4502,7 @@ function AppInner() {
               }}
               style={{ cursor: 'col-resize' }}
               title="Drag to resize · Double-click to reset"
-              className="w-1.5 shrink-0 rounded-full bg-transparent hover:bg-[var(--studio-accent)]/70 transition-colors z-50"
+              className="w-1.5 shrink-0 rounded-full bg-transparent hover:bg-[var(--studio-accent)]/70 transition-colors z-10"
             />
             <RightStudioPanel
               widthPx={rightSidebarWidth}
@@ -4664,6 +4593,7 @@ function AppInner() {
           </>
         )}
       </div>
+          </ErrorBoundary>
         </>
       )}
 

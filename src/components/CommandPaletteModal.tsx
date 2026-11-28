@@ -371,7 +371,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-20 bg-[var(--studio-modal-backdrop)] backdrop-blur-sm p-4"
+      className="fixed inset-0 z-40 flex items-start justify-center pt-20 bg-[var(--studio-modal-backdrop)] backdrop-blur-sm p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Command Palette"
@@ -379,7 +379,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-xl rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden">
+      <div className="w-full max-w-xl studio-modal-panel rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden">
         <div className="px-3.5 py-2.5 border-b border-[var(--studio-border)] flex items-center gap-2.5">
           <Search className="w-4 h-4 text-[var(--studio-muted)] shrink-0" strokeWidth={1.6} />
           <input
