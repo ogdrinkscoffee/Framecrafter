@@ -63,6 +63,8 @@ function sanitizeSearchQuery(value: unknown): string | undefined {
   return cleaned ? cleaned.slice(0, MAX_GITHUB_SEARCH_QUERY_LEN) : undefined;
 }
 
+let warnedUnverifiedAi = false;
+
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const GITHUB_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -236,6 +238,28 @@ async function startServer() {
 
       // Public, unauthenticated AI trigger: verify the Turnstile challenge before
       // spending any model budget. Tokens are single-use and verified server-side.
+      // Fail closed: with no Turnstile keys this route would be an open, unmetered
+      // proxy to the Gemini API, so production refuses to serve it at all.
+      const turnstile = getTurnstileConfig();
+      if (!turnstile.enabled) {
+        if (isProd) {
+          console.error(
+            '[AI] Refusing /api/ai/edit-element: TURNSTILE_SITE_KEY/TURNSTILE_SECRET_KEY are not configured.'
+          );
+          res.status(503).json({
+            ok: false,
+            error: 'AI Co-Pilot is disabled because bot protection is not configured on the server.',
+          });
+          return;
+        }
+        if (!warnedUnverifiedAi) {
+          warnedUnverifiedAi = true;
+          console.warn(
+            '[AI] Bot protection is OFF: /api/ai/edit-element is accepting unverified requests (development only).'
+          );
+        }
+      }
+
       const remoteIp = req.ip || req.socket.remoteAddress || undefined;
       const botCheck = await verifyTurnstileToken(validated.data.captchaToken, remoteIp);
       if (!botCheck.ok) {
