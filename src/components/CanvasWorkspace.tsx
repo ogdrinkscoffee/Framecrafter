@@ -68,6 +68,7 @@ import type {
   DraggableComponentDef,
   EditorMode,
   ElementRect,
+  LayoutIssue,
   ProjectFile,
   QuickInsertKind,
   SelectedElementInfo,
@@ -91,6 +92,8 @@ interface CanvasWorkspaceProps {
   onToggleAutoSave: () => void;
   viewport: ViewportPreset;
   onChangeViewport?: (viewport: ViewportPreset) => void;
+  /** Canvas chrome for the active platform target. */
+  previewPlatform: 'browser' | 'desktop-window' | 'android-device';
   activeArtboard: ArtboardId;
   onSelectArtboard: (artboard: ArtboardId) => void;
   onRegisterArtboardIframe: (artboard: ArtboardId, el: HTMLIFrameElement | null) => void;
@@ -132,6 +135,9 @@ interface CanvasWorkspaceProps {
   onUpdateCodeContent: (path: string, nextContent: string) => void;
   onPostIframeMessage: (msg: Record<string, unknown>, targetArtboard?: ArtboardId | 'all') => void;
   onDropComponentOnCanvas: (component: DraggableComponentDef) => void;
+  overlapXray: boolean;
+  layoutIssues: LayoutIssue[];
+  onAutoFixLayoutIssue: (issue: LayoutIssue) => void;
   aiCopilot: AiElementCopilotControls;
 }
 
@@ -258,6 +264,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   onToggleAutoSave,
   viewport,
   onChangeViewport,
+  previewPlatform,
   activeArtboard,
   onSelectArtboard,
   onRegisterArtboardIframe,
@@ -299,6 +306,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   onUpdateCodeContent,
   onPostIframeMessage,
   onDropComponentOnCanvas,
+  overlapXray,
+  layoutIssues,
+  onAutoFixLayoutIssue,
   aiCopilot,
 }) => {
   const [dragState, setDragState] = useState<DragSessionState | null>(null);
@@ -583,7 +593,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       }
       const dx = (e.clientX - prev.startX) / scale;
       const deltaW = prev.axis === 'right' ? dx * 2 : -dx * 2;
-      const nextW = Math.max(320, Math.min(1800, Math.round(prev.startW + deltaW)));
+      const nextW = Math.max(320, Math.min(2560, Math.round(prev.startW + deltaW)));
       const nextDrag = { ...prev, currentW: nextW };
       frameDragRef.current = nextDrag;
       setFrameDrag(nextDrag);
@@ -2424,6 +2434,69 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 </div>
               )}
 
+              {overlapXray && (
+                <div
+                  data-testid="overlap-xray-panel"
+                  className="absolute -right-3 top-2 z-40 w-[250px] rounded-xl border border-amber-500/40 bg-[var(--studio-surface)] shadow-2xl overflow-hidden"
+                >
+                  <div className="px-2.5 py-1.5 border-b border-[var(--studio-border)] flex items-center justify-between gap-2 text-[11px] font-semibold text-[var(--studio-text-strong)]">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+                      Overlap X-Ray · {layoutIssues.length}
+                    </span>
+                    <span className="font-mono-tabular tabular-nums text-[10.5px] text-[var(--studio-muted)]">
+                      {Math.round(effectiveFrameWidthPx)}px
+                    </span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto builder-scroll divide-y divide-[var(--studio-border)]">
+                    {layoutIssues.length === 0 ? (
+                      <p className="px-2.5 py-2 text-[11px] text-[var(--studio-muted)] leading-relaxed">
+                        No colliding siblings or horizontal overflow at this width.
+                      </p>
+                    ) : (
+                      layoutIssues.map((issue, index) => (
+                        <div
+                          key={`${issue.uniqueSelector}-${issue.kind}-${index}`}
+                          className="px-2.5 py-2 space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono-tabular text-[10.5px] font-semibold text-[var(--studio-text-strong)] truncate">
+                              {issue.label}
+                            </span>
+                            <span
+                              className={`text-[9.5px] uppercase tracking-wide font-semibold shrink-0 ${
+                                issue.kind === 'overlap'
+                                  ? 'text-rose-600 dark:text-rose-400'
+                                  : 'text-amber-600 dark:text-amber-400'
+                              }`}
+                            >
+                              {issue.kind}
+                            </span>
+                          </div>
+                          <p className="text-[10.5px] text-[var(--studio-muted)] leading-snug">
+                            {issue.detail}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => onAutoFixLayoutIssue(issue)}
+                            className="w-full h-6 rounded-md border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-[10.5px] font-semibold text-amber-800 dark:text-amber-300 cursor-pointer"
+                          >
+                            Auto-Fix for This Resolution
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div
+                className="pointer-events-none absolute -right-2 top-2 z-30 px-1.5 py-0.5 rounded-md bg-[var(--studio-bg)] border border-[var(--studio-border)] text-[10.5px] font-mono-tabular tabular-nums text-[var(--studio-text-strong)]"
+                aria-hidden="true"
+              >
+                {Math.round(frameDrag ? frameDrag.currentW : effectiveFrameWidthPx)}px
+              </div>
+
               <div
                 ref={frameContainerRef}
                 data-testid="canvas-frame"
@@ -2433,7 +2506,13 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   transform: zoomScale !== 1 ? `scale(${zoomScale})` : undefined,
                   transformOrigin: 'top left',
                 }}
-                className="relative min-h-[300px] flex flex-col rounded-xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl"
+                className={`relative min-h-[300px] flex flex-col bg-[var(--studio-surface)] shadow-2xl ${
+                  previewPlatform === 'android-device'
+                    ? 'rounded-[30px] border-[3px] border-[var(--studio-border-strong)]'
+                    : previewPlatform === 'desktop-window'
+                      ? 'rounded-lg border-2 border-[var(--studio-border-strong)]'
+                      : 'rounded-xl border border-[var(--studio-border-strong)]'
+                }`}
               >
                 {/* Left Edge Frame Resize Handle */}
                 <div
@@ -2485,6 +2564,13 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                       <span className="w-2 h-2 rounded-full bg-[var(--studio-border-strong)]" />
                       <span className="w-2 h-2 rounded-full bg-[var(--studio-border-strong)]" />
                     </div>
+                    <span className="shrink-0 inline-flex items-center h-4 px-1.5 rounded border border-[var(--studio-border)] bg-[var(--studio-bg)] text-[9.5px] font-semibold uppercase tracking-[0.08em] text-[var(--studio-muted)]">
+                      {previewPlatform === 'android-device'
+                        ? 'Android Device'
+                        : previewPlatform === 'desktop-window'
+                          ? 'Desktop Window'
+                          : 'Browser'}
+                    </span>
                     {htmlPages.length > 1 ? (
                       <select
                         aria-label="Active preview HTML page"
@@ -2531,9 +2617,21 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
                 {/* Sandboxed Iframe + Selection/Move/Resize Overlay + Spacing Guides + Drag-Drop Target */}
                 <div
-                  className="relative flex-1 bg-white overflow-hidden rounded-b-xl"
+                  className={`relative flex-1 bg-white overflow-hidden ${
+                    previewPlatform === 'android-device'
+                      ? 'rounded-b-[27px]'
+                      : previewPlatform === 'desktop-window'
+                        ? 'rounded-b-md'
+                        : 'rounded-b-xl'
+                  }`}
                   data-testid="preview-stage"
                 >
+                  {previewPlatform === 'android-device' && (
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute top-1.5 left-1/2 -translate-x-1/2 z-20 w-16 h-1.5 rounded-full bg-black/60"
+                    />
+                  )}
                   <iframe
                     key={previewKey}
                     name={`ve-artboard:${viewport}`}

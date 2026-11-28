@@ -7,26 +7,33 @@ import {
   FilePlus2,
   FolderOpen,
   GitBranch,
+  Globe,
   Keyboard,
   LayoutTemplate,
   Link2,
   Loader2,
   LogOut,
+  Monitor,
   Moon,
   RefreshCw,
   Search,
+  Smartphone,
   Sparkles,
   Sun,
   Upload,
 } from 'lucide-react';
 import type { SampleTemplate, StudioThemeId } from '../types/editor';
 import type { GitHubRepoSummary, GitHubUserProfile } from '../utils/githubSync';
+import type { RepoTarget, RepoLayoutMode } from '../utils/repoTargets';
 import { FramecraftLogoMark } from './StudioPrimitives';
 
 interface StartHubProps {
   templates: SampleTemplate[];
   currentProjectName: string;
   currentFileCount: number;
+  repoTargets?: RepoTarget[];
+  repoLayout?: RepoLayoutMode;
+  onSelectRepoTarget?: (targetId: string) => void;
   studioTheme: StudioThemeId;
   onChangeStudioTheme: (theme: StudioThemeId) => void;
   onResumeWorkspace: () => void;
@@ -213,6 +220,9 @@ export const StartHub: React.FC<StartHubProps> = ({
   templates,
   currentProjectName,
   currentFileCount,
+  repoTargets = [],
+  repoLayout = 'single',
+  onSelectRepoTarget,
   studioTheme,
   onChangeStudioTheme,
   onResumeWorkspace,
@@ -425,6 +435,36 @@ export const StartHub: React.FC<StartHubProps> = ({
               Edit visually with direct nudging, snap guides, instant zero-reload undo/redo, and two-way source code sync.
             </p>
           </div>
+
+          {repoTargets.length > 1 && (
+            <div
+              className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-surface)]/70 px-3 py-2"
+              aria-label="Detected project targets"
+            >
+              <span className="studio-eyebrow">
+                {repoLayout === 'monorepo' ? 'Monorepo targets' : 'Shared UI targets'}
+              </span>
+              {repoTargets.map((target) => {
+                const Icon =
+                  target.kind === 'mobile' ? Smartphone : target.kind === 'desktop' ? Monitor : Globe;
+                return (
+                  <button
+                    key={target.id}
+                    type="button"
+                    onClick={() => onSelectRepoTarget?.(target.id)}
+                    title={`Open ${target.label} · ${target.framework} · ${target.rootPath || 'root'}`}
+                    className="inline-flex items-center gap-1.5 h-6 px-2 rounded-md border border-[var(--studio-border)] bg-[var(--studio-elevated)] hover:border-indigo-500/50 hover:bg-[var(--studio-hover)] text-[11px] font-semibold text-[var(--studio-text-strong)] cursor-pointer transition-colors"
+                  >
+                    <Icon className="w-3 h-3 text-indigo-500 dark:text-indigo-300" strokeWidth={1.6} />
+                    {target.label}
+                    <span className="font-mono-tabular text-[10px] font-normal text-[var(--studio-muted-soft)]">
+                      {target.rootPath || 'root'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             {/* 1. Resume Current Workspace */}

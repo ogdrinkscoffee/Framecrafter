@@ -20,6 +20,14 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   [data-ve-dragging="true"] {
     cursor: grabbing !important;
   }
+  [data-ve-overlap="true"] {
+    outline: 2px solid rgba(244, 63, 94, 0.95) !important;
+    outline-offset: 1px !important;
+  }
+  [data-ve-overflow="true"] {
+    outline: 2px dashed rgba(245, 158, 11, 0.95) !important;
+    outline-offset: 1px !important;
+  }
   [data-ve-editing="true"] {
     outline: 2px solid #f59e0b !important;
     outline-offset: 2px !important;
@@ -111,6 +119,8 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
   var actionToastTimer = null;
   var domTreeTimer = null;
   var outlinesEnabled = false;
+  var xrayEnabled = false;
+  var xrayTimer = null;
   var liveResponsiveStyleEl = document.querySelector('style[data-ve-internal="live-responsive-css"]');
   var previewResponsiveStyleEl = document.querySelector('style[data-ve-internal="preview-responsive-css"]');
   var livePositionFrame = 0;
@@ -152,6 +162,126 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       '  outline: 1px dashed rgba(56, 189, 248, 0.42) !important;' +
       '  outline-offset: -1px !important;' +
       '}';
+  }
+
+  function clearXrayMarks() {
+    var marked = document.querySelectorAll('[data-ve-overlap="true"], [data-ve-overflow="true"]');
+    for (var xi = 0; xi < marked.length; xi++) {
+      marked[xi].removeAttribute('data-ve-overlap');
+      marked[xi].removeAttribute('data-ve-overflow');
+    }
+  }
+
+  function describeIssueElement(el) {
+    var rect = el.getBoundingClientRect();
+    var parent = el.parentElement;
+    return {
+      veId: el.getAttribute('data-ve-id') || null,
+      rtId: el.getAttribute('data-ve-rt') || null,
+      uniqueSelector: buildUniqueCssSelector(el),
+      label: buildElementLabel(el),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      parentDisplay: parent ? window.getComputedStyle(parent).display : ''
+    };
+  }
+
+  // Sibling collision + horizontal overflow detection for the active viewport.
+  function scanLayoutIssues() {
+    clearXrayMarks();
+    if (!xrayEnabled || mode !== 'edit' || !document.body) return [];
+
+    var issues = [];
+    var seen = {};
+    var maxIssues = 40;
+
+    function pushIssue(el, kind, detail) {
+      if (issues.length >= maxIssues) return;
+      var payload = describeIssueElement(el);
+      var key = kind + '|' + (payload.veId || payload.rtId || payload.uniqueSelector);
+      if (seen[key]) return;
+      seen[key] = true;
+      el.setAttribute(kind === 'overlap' ? 'data-ve-overlap' : 'data-ve-overflow', 'true');
+      issues.push({
+        kind: kind,
+        detail: detail,
+        veId: payload.veId,
+        rtId: payload.rtId,
+        uniqueSelector: payload.uniqueSelector,
+        label: payload.label,
+        width: payload.width,
+        height: payload.height,
+        parentDisplay: payload.parentDisplay
+      });
+    }
+
+    var elements = document.body.querySelectorAll('*');
+    for (var i = 0; i < elements.length && issues.length < maxIssues; i++) {
+      var el = elements[i];
+      if (!el || el.nodeType !== 1 || isInternalEl(el)) continue;
+      var style = window.getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') continue;
+      var rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      if (el.clientWidth > 0 && el.scrollWidth > el.clientWidth + 1) {
+        pushIssue(
+          el,
+          'overflow',
+          'Content is ' + (el.scrollWidth - el.clientWidth) + 'px wider than its own box at ' + Math.round(window.innerWidth) + 'px.'
+        );
+      }
+    }
+
+    for (var p = 0; p < elements.length && issues.length < maxIssues; p++) {
+      var parent = elements[p];
+      if (!parent || isInternalEl(parent) || !parent.children || parent.children.length < 2) continue;
+      var kids = [];
+      for (var k = 0; k < parent.children.length; k++) {
+        var kid = parent.children[k];
+        if (!kid || isInternalEl(kid)) continue;
+        var kidStyle = window.getComputedStyle(kid);
+        if (kidStyle.display === 'none' || kidStyle.visibility === 'hidden') continue;
+        var kidRect = kid.getBoundingClientRect();
+        if (kidRect.width < 2 || kidRect.height < 2) continue;
+        kids.push({ el: kid, rect: kidRect });
+      }
+      for (var a = 0; a < kids.length && issues.length < maxIssues; a++) {
+        for (var b = a + 1; b < kids.length && issues.length < maxIssues; b++) {
+          var first = kids[a];
+          var second = kids[b];
+          if (first.el.contains(second.el) || second.el.contains(first.el)) continue;
+          var overlapW =
+            Math.min(first.rect.right, second.rect.right) - Math.max(first.rect.left, second.rect.left);
+          var overlapH =
+            Math.min(first.rect.bottom, second.rect.bottom) - Math.max(first.rect.top, second.rect.top);
+          if (overlapW > 8 && overlapH > 8) {
+            pushIssue(
+              second.el,
+              'overlap',
+              'Collides with ' + buildElementLabel(first.el) + ' across ' + Math.round(overlapW) + '×' + Math.round(overlapH) + 'px.'
+            );
+          }
+        }
+      }
+    }
+
+    return issues;
+  }
+
+  function emitLayoutIssues() {
+    postToParent('OVERLAP_REPORT', {
+      issues: scanLayoutIssues(),
+      width: Math.round(window.innerWidth)
+    });
+  }
+
+  function scheduleXrayScan() {
+    if (!xrayEnabled) return;
+    if (xrayTimer) window.clearTimeout(xrayTimer);
+    xrayTimer = window.setTimeout(function() {
+      xrayTimer = null;
+      emitLayoutIssues();
+    }, 140);
   }
 
   function resolveEditableTarget(rawTarget) {
@@ -606,7 +736,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
   // Live @media preview: applies the in-progress override as a real media rule in
   // every artboard, so each frame evaluates it against its own viewport width.
-  function applyResponsivePreviewCss(selector, scope, styles) {
+  function applyResponsivePreviewCss(selector, scope, styles, breakpoint) {
     if (!previewResponsiveStyleEl) return;
     if (!selector) {
       previewResponsiveStyleEl.textContent = '';
@@ -623,12 +753,28 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       return;
     }
     var rule = selector + ' {\\n' + decls.join('\\n') + '\\n}';
-    if (scope === 'desktop') {
-      rule = '@media (min-width: 769px) {\\n' + rule + '\\n}';
+    var condition = '';
+    if (
+      breakpoint &&
+      (typeof breakpoint.minWidth === 'number' || typeof breakpoint.maxWidth === 'number')
+    ) {
+      var conditions = [];
+      if (typeof breakpoint.minWidth === 'number') {
+        conditions.push('(min-width: ' + breakpoint.minWidth + 'px)');
+      }
+      if (typeof breakpoint.maxWidth === 'number') {
+        conditions.push('(max-width: ' + breakpoint.maxWidth + 'px)');
+      }
+      condition = conditions.join(' and ');
+    } else if (scope === 'desktop') {
+      condition = '(min-width: 769px)';
     } else if (scope === 'tablet') {
-      rule = '@media (max-width: 768px) and (min-width: 481px) {\\n' + rule + '\\n}';
+      condition = '(max-width: 768px) and (min-width: 481px)';
     } else if (scope === 'mobile') {
-      rule = '@media (max-width: 480px) {\\n' + rule + '\\n}';
+      condition = '(max-width: 480px)';
+    }
+    if (condition) {
+      rule = '@media ' + condition + ' {\\n' + rule + '\\n}';
     }
     previewResponsiveStyleEl.textContent = rule;
   }
@@ -1029,6 +1175,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
 
   window.addEventListener('scroll', notifyRectChange, true);
   window.addEventListener('resize', notifyRectChange, true);
+  window.addEventListener('resize', scheduleXrayScan, true);
 
   window.addEventListener('message', function(e) {
     var msg = e.data;
@@ -1056,12 +1203,25 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
         }
       }
       applyOutlinesCss();
+      scheduleXrayScan();
       return;
     }
 
     if (msg.type === 'SET_OUTLINES') {
       outlinesEnabled = Boolean(msg.enabled);
       applyOutlinesCss();
+      return;
+    }
+
+    if (msg.type === 'SET_OVERLAP_XRAY') {
+      xrayEnabled = Boolean(msg.enabled);
+      if (!xrayEnabled) clearXrayMarks();
+      emitLayoutIssues();
+      return;
+    }
+
+    if (msg.type === 'RUN_OVERLAP_SCAN') {
+      emitLayoutIssues();
       return;
     }
 
@@ -1175,7 +1335,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     }
 
     if (msg.type === 'PREVIEW_RESPONSIVE_STYLE') {
-      applyResponsivePreviewCss(msg.selector, msg.scope, msg.styles || {});
+      applyResponsivePreviewCss(msg.selector, msg.scope, msg.styles || {}, msg.breakpoint || null);
       window.requestAnimationFrame(notifyRectChange);
       return;
     }
@@ -1615,6 +1775,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
       if (needsTag) {
         tryRestoreInitialSelection();
         scheduleDomTreeEmit();
+        scheduleXrayScan();
         if (!didNotifyMount) {
           syncMountedDom();
         }
@@ -1629,6 +1790,7 @@ export function buildIframeBridgeMarkup(initialMode: EditorMode, selectedVeId: s
     if (domObserver) domObserver.disconnect();
     if (actionToastTimer) window.clearTimeout(actionToastTimer);
     if (domTreeTimer) window.clearTimeout(domTreeTimer);
+    if (xrayTimer) window.clearTimeout(xrayTimer);
   }, { once: true });
 })();
 </script>`;

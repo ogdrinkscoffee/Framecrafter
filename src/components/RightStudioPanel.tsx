@@ -5,6 +5,7 @@ import type {
   DraggableComponentDef,
   HistoryState,
   ProjectFile,
+  BreakpointScope,
   ResponsiveScope,
   RightPanelTab,
   SelectedElementInfo,
@@ -15,6 +16,8 @@ import { GlobalStylesPanel } from './GlobalStylesPanel';
 import { HistoryTimelinePanel } from './HistoryTimelinePanel';
 import { InspectorPanel } from './InspectorPanel';
 import { SeoMetaPanel } from './SeoMetaPanel';
+import { PlatformConfigPanel } from './PlatformConfigPanel';
+import type { RepoTarget } from '../utils/repoTargets';
 import type { SvgShapeHtmlPatch } from '../utils/htmlSync';
 import type { AiElementCopilotControls } from './AiElementBar';
 import {
@@ -42,6 +45,12 @@ interface RightStudioPanelProps {
   onToggleAspectRatioLock: (locked: boolean) => void;
   responsiveScope: ResponsiveScope;
   onChangeResponsiveScope: (scope: ResponsiveScope) => void;
+  breakpointScope: BreakpointScope;
+  onChangeBreakpointScope: (scope: BreakpointScope) => void;
+  onResetScopeOverride: (property: string) => void;
+  /** Active platform target — desktop/mobile swap the SEO tab for a config inspector. */
+  platformTarget?: RepoTarget | null;
+  projectFiles?: ProjectFile[];
   activeHtmlPath: string | null;
   activeHtmlContent: string;
   htmlPages: string[];
@@ -51,7 +60,7 @@ interface RightStudioPanelProps {
   onPreviewStyle: (styles: Record<string, string>) => void;
   onCommitStyle: (styles: Record<string, string | null>, label: string) => void;
   onCommitResponsiveStyle: (
-    scope: ResponsiveScope,
+    scope: ResponsiveScope | BreakpointScope,
     styles: Record<string, string | null>,
     label: string
   ) => void;
@@ -147,6 +156,11 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
   onToggleAspectRatioLock,
   responsiveScope,
   onChangeResponsiveScope,
+  breakpointScope,
+  onChangeBreakpointScope,
+  onResetScopeOverride,
+  platformTarget = null,
+  projectFiles = [],
   activeHtmlPath,
   activeHtmlContent,
   htmlPages,
@@ -216,7 +230,11 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
                 }`}
               >
                 <span className="shrink-0 flex items-center">{tab.renderIcon(isActive)}</span>
-                <span className="studio-reveal-label">{tab.label}</span>
+                <span className="studio-reveal-label">
+                  {tab.id === 'seo' && platformTarget && platformTarget.kind !== 'web'
+                    ? 'Platform Config'
+                    : tab.label}
+                </span>
               </button>
             );
           })}
@@ -241,6 +259,9 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
           onToggleAspectRatioLock={onToggleAspectRatioLock}
           responsiveScope={responsiveScope}
           onChangeResponsiveScope={onChangeResponsiveScope}
+          breakpointScope={breakpointScope}
+          onChangeBreakpointScope={onChangeBreakpointScope}
+          onResetScopeOverride={onResetScopeOverride}
           stylesCssContent={stylesCssContent}
           overrideCssContent={overrideCssContent}
           activeHtmlContent={activeHtmlContent}
@@ -283,13 +304,16 @@ export const RightStudioPanel: React.FC<RightStudioPanelProps> = ({
         />
       )}
 
-      {activeTab === 'seo' && (
-        <SeoMetaPanel
-          htmlPath={activeHtmlPath}
-          htmlContent={activeHtmlContent}
-          onCommitSeoMeta={onCommitSeoMeta}
-        />
-      )}
+      {activeTab === 'seo' &&
+        (platformTarget && platformTarget.kind !== 'web' ? (
+          <PlatformConfigPanel target={platformTarget} files={projectFiles} />
+        ) : (
+          <SeoMetaPanel
+            htmlPath={activeHtmlPath}
+            htmlContent={activeHtmlContent}
+            onCommitSeoMeta={onCommitSeoMeta}
+          />
+        ))}
 
       {activeTab === 'global-styles' && (
         <GlobalStylesPanel

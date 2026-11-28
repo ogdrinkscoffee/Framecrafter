@@ -39,6 +39,7 @@ import {
   Upload,
 } from 'lucide-react';
 import type {
+  BreakpointScope,
   ButtonActionType,
   ProjectFile,
   ResponsiveScope,
@@ -52,7 +53,12 @@ import {
 } from '../utils/htmlSync';
 import { FONT_CATEGORIES, STUDIO_FONT_CATALOG, matchStudioFontOption } from '../utils/fontLibrary';
 import { isImageAssetPath, toSvgDataUrl } from '../utils/projectBundler';
-import { getNodeDeviceVisibility, getResponsiveNodeStyles } from '../utils/responsiveCss';
+import {
+  breakpointRangeToLabel,
+  getNodeDeviceVisibility,
+  getScopedNodeStyles,
+  rangeForPresetScope,
+} from '../utils/responsiveCss';
 import {
   getRuntimeDeviceVisibilityFromCss,
   getRuntimeStyleOverridesFromCss,
@@ -68,6 +74,9 @@ interface InspectorPanelProps {
   onToggleAspectRatioLock: (locked: boolean) => void;
   responsiveScope: ResponsiveScope;
   onChangeResponsiveScope: (scope: ResponsiveScope) => void;
+  breakpointScope: BreakpointScope;
+  onChangeBreakpointScope: (scope: BreakpointScope) => void;
+  onResetScopeOverride: (property: string) => void;
   stylesCssContent: string;
   overrideCssContent?: string;
   activeHtmlContent: string;
@@ -75,7 +84,7 @@ interface InspectorPanelProps {
   onPreviewStyle: (styles: Record<string, string>) => void;
   onCommitStyle: (styles: Record<string, string | null>, label: string) => void;
   onCommitResponsiveStyle: (
-    scope: ResponsiveScope,
+    scope: ResponsiveScope | BreakpointScope,
     styles: Record<string, string | null>,
     label: string
   ) => void;
@@ -117,6 +126,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onToggleAspectRatioLock,
   responsiveScope,
   onChangeResponsiveScope,
+  breakpointScope,
+  onChangeBreakpointScope,
+  onResetScopeOverride,
   stylesCssContent,
   overrideCssContent = '',
   activeHtmlContent,
@@ -166,6 +178,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const [cellPaddingDraft, setCellPaddingDraft] = useState('10px 12px');
   const [imgSrcDraft, setImgSrcDraft] = useState('');
   const [imgAltDraft, setImgAltDraft] = useState('');
+  const [rangePopoverOpen, setRangePopoverOpen] = useState(false);
+  const [minRangeDraft, setMinRangeDraft] = useState('');
+  const [maxRangeDraft, setMaxRangeDraft] = useState('');
 
   // SVG Shape Properties drafts
   const [shapeFillDraft, setShapeFillDraft] = useState('#3b82f6');
@@ -200,9 +215,18 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const runtimeSelector =
     selectedElement?.uniqueSelector || selectedElement?.selectorPath || '';
 
+  const isScoped =
+    breakpointScope.mode !== 'all' &&
+    (breakpointScope.minWidth !== undefined || breakpointScope.maxWidth !== undefined);
+
+  useEffect(() => {
+    setMinRangeDraft(breakpointScope.minWidth !== undefined ? String(breakpointScope.minWidth) : '');
+    setMaxRangeDraft(breakpointScope.maxWidth !== undefined ? String(breakpointScope.maxWidth) : '');
+  }, [breakpointScope]);
+
   const scopeOverrides = useMemo(() => {
     if (selectedElement?.veNode) {
-      return getResponsiveNodeStyles(stylesCssContent, selectedElement.veNode, responsiveScope);
+      return getScopedNodeStyles(stylesCssContent, selectedElement.veNode, breakpointScope);
     }
     if (!selectedElement?.veId && runtimeSelector && overrideCssContent) {
       return getRuntimeStyleOverridesFromCss(overrideCssContent, runtimeSelector, responsiveScope);
@@ -215,6 +239,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     selectedElement?.veId,
     runtimeSelector,
     responsiveScope,
+    breakpointScope,
   ]);
 
   const deviceVisibility = useMemo(() => {
@@ -291,7 +316,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     }
 
     const pick = (cssProp: string, fallback: string) => {
-      if (responsiveScope !== 'all' && scopeOverrides[cssProp] !== undefined) {
+      if (isScoped && scopeOverrides[cssProp] !== undefined) {
         return scopeOverrides[cssProp];
       }
       return selectedElement.inlineStyles[cssProp] || fallback;
@@ -323,14 +348,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
     if (isNewElement || activeId !== 'prop-text-color-hex') {
       const nextTextColor =
-        (responsiveScope !== 'all' && scopeOverrides.color) ||
+        (isScoped && scopeOverrides.color) ||
         cssColorToHex(selectedElement.styles.color) ||
         selectedElement.styles.color;
       setTextColorDraft(nextTextColor);
     }
     if (isNewElement || activeId !== 'prop-bg-color-hex') {
       const nextBgColor =
-        (responsiveScope !== 'all' && scopeOverrides['background-color']) ||
+        (isScoped && scopeOverrides['background-color']) ||
         cssColorToHex(selectedElement.styles.backgroundColor) ||
         selectedElement.styles.backgroundColor;
       setBgColorDraft(nextBgColor);
@@ -440,45 +465,45 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   }
 
   const effectiveDisplay =
-    (responsiveScope !== 'all' && scopeOverrides.display) || selectedElement.styles.display;
+    (isScoped && scopeOverrides.display) || selectedElement.styles.display;
   const effectiveFlexDir =
-    (responsiveScope !== 'all' && scopeOverrides['flex-direction']) ||
+    (isScoped && scopeOverrides['flex-direction']) ||
     selectedElement.styles.flexDirection;
   const effectiveTextAlign =
-    (responsiveScope !== 'all' && scopeOverrides['text-align']) ||
+    (isScoped && scopeOverrides['text-align']) ||
     selectedElement.styles.textAlign;
   const effectiveFontWeight =
-    (responsiveScope !== 'all' && scopeOverrides['font-weight']) ||
+    (isScoped && scopeOverrides['font-weight']) ||
     selectedElement.styles.fontWeight;
   const effectiveFontStyle =
-    (responsiveScope !== 'all' && scopeOverrides['font-style']) ||
+    (isScoped && scopeOverrides['font-style']) ||
     selectedElement.styles.fontStyle;
   const effectiveTextDeco =
-    (responsiveScope !== 'all' && scopeOverrides['text-decoration']) ||
+    (isScoped && scopeOverrides['text-decoration']) ||
     selectedElement.styles.textDecoration;
   const effectiveFontFamily =
-    (responsiveScope !== 'all' && scopeOverrides['font-family']) ||
+    (isScoped && scopeOverrides['font-family']) ||
     selectedElement.inlineStyles['font-family'] ||
     '';
   const effectivePosition =
-    (responsiveScope !== 'all' && scopeOverrides.position) || selectedElement.styles.position;
+    (isScoped && scopeOverrides.position) || selectedElement.styles.position;
   const effectiveBorderStyle =
-    (responsiveScope !== 'all' && scopeOverrides['border-style']) ||
+    (isScoped && scopeOverrides['border-style']) ||
     selectedElement.styles.borderStyle;
   const effectiveJustify =
-    (responsiveScope !== 'all' && scopeOverrides['justify-content']) ||
+    (isScoped && scopeOverrides['justify-content']) ||
     selectedElement.styles.justifyContent ||
     'flex-start';
   const effectiveAlign =
-    (responsiveScope !== 'all' && scopeOverrides['align-items']) ||
+    (isScoped && scopeOverrides['align-items']) ||
     selectedElement.styles.alignItems ||
     'stretch';
   const effectiveFlexWrap =
-    (responsiveScope !== 'all' && scopeOverrides['flex-wrap']) ||
+    (isScoped && scopeOverrides['flex-wrap']) ||
     selectedElement.styles.flexWrap ||
     'nowrap';
   const effectiveOverflow =
-    (responsiveScope !== 'all' && scopeOverrides.overflow) ||
+    (isScoped && scopeOverrides.overflow) ||
     selectedElement.styles.overflow ||
     'visible';
 
@@ -489,16 +514,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
   const textColorHex =
     cssColorToHex(
-      (responsiveScope !== 'all' && scopeOverrides.color) || selectedElement.styles.color
+      (isScoped && scopeOverrides.color) || selectedElement.styles.color
     ) || '#0f172a';
   const bgColorHex =
     cssColorToHex(
-      (responsiveScope !== 'all' && scopeOverrides['background-color']) ||
+      (isScoped && scopeOverrides['background-color']) ||
         selectedElement.styles.backgroundColor
     ) || '#ffffff';
   const borderColorHex =
     cssColorToHex(
-      (responsiveScope !== 'all' && scopeOverrides['border-color']) ||
+      (isScoped && scopeOverrides['border-color']) ||
         selectedElement.styles.borderColor
     ) || '#cbd5e1';
 
@@ -641,13 +666,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const isSvgShape = selectedElement.tagName === 'svg' || Boolean(selectedElement.veShape && selectedElement.tagName === 'svg');
   const isImageTag = selectedElement.tagName === 'img';
   const effectiveObjectFit =
-    (responsiveScope !== 'all' && scopeOverrides['object-fit']) ||
+    (isScoped && scopeOverrides['object-fit']) ||
     selectedElement.inlineStyles['object-fit'] ||
     selectedElement.styles.objectFit ||
     'cover';
   const inspectorPreviewUrl = isImageTag ? resolveInspectorImagePreview(imgSrcDraft) : '';
   const currentZIndex = Number.parseInt(
-    (responsiveScope !== 'all' && scopeOverrides['z-index']) || selectedElement.styles.zIndex || '0',
+    (isScoped && scopeOverrides['z-index']) || selectedElement.styles.zIndex || '0',
     10
   ) || 0;
 
@@ -714,55 +739,211 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </div>
         </div>
 
-        {/* Responsive Breakpoint Scope Selector */}
-        <div className="space-y-1">
+        {/* Resolution-scoped Edit Scope switcher */}
+        <div className="space-y-1.5">
           <div
-            className="grid grid-cols-4 h-7 p-0.5 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)]"
+            className="grid grid-cols-2 h-7 p-0.5 rounded-lg bg-[var(--studio-bg)] border border-[var(--studio-border)]"
             role="group"
-            aria-label="Responsive Editing Scope"
+            aria-label="Edit Scope"
           >
-            {(['all', 'desktop', 'tablet', 'mobile'] as ResponsiveScope[]).map((scope) => (
+            <button
+              type="button"
+              title={SCOPE_LABELS.all}
+              onClick={() => onChangeBreakpointScope({ mode: 'all', label: 'All Screens' })}
+              aria-pressed={!isScoped}
+              className={`h-full rounded-md text-[11px] font-medium studio-pressable cursor-pointer ${
+                !isScoped
+                  ? 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs border border-[var(--studio-border)]'
+                  : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
+              }`}
+            >
+              All Screens
+            </button>
+            <button
+              type="button"
+              title="Edit styles only inside this resolution's @media range"
+              onClick={() => {
+                const fallbackPreset: Exclude<ResponsiveScope, 'all'> =
+                  responsiveScope === 'all' ? 'desktop' : responsiveScope;
+                const range = rangeForPresetScope(fallbackPreset);
+                onChangeBreakpointScope({
+                  mode: 'preset',
+                  ...range,
+                  label: breakpointRangeToLabel(range),
+                });
+              }}
+              aria-pressed={isScoped}
+              className={`h-full rounded-md text-[11px] font-medium studio-pressable cursor-pointer truncate px-1 ${
+                isScoped
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
+              }`}
+            >
+              This Resolution · {isScoped ? breakpointScope.label : '—'}
+            </button>
+          </div>
+
+          {isScoped && (
+            <div className="flex items-center gap-1">
+              {(['desktop', 'tablet', 'mobile'] as const).map((preset) => {
+                const range = rangeForPresetScope(preset);
+                const active =
+                  breakpointScope.minWidth === range.minWidth &&
+                  breakpointScope.maxWidth === range.maxWidth;
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() =>
+                      onChangeBreakpointScope({
+                        mode: 'preset',
+                        ...range,
+                        label: breakpointRangeToLabel(range),
+                      })
+                    }
+                    aria-pressed={active}
+                    className={`flex-1 h-6 rounded-md border text-[10.5px] font-medium capitalize studio-pressable cursor-pointer ${
+                      active
+                        ? 'border-indigo-500/60 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300'
+                        : 'border-[var(--studio-border)] text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                );
+              })}
               <button
-                key={scope}
                 type="button"
-                title={SCOPE_LABELS[scope]}
-                onClick={() => onChangeResponsiveScope(scope)}
-                aria-pressed={responsiveScope === scope}
-                className={`h-full rounded-md text-[11px] font-medium capitalize studio-pressable cursor-pointer ${
-                  responsiveScope === scope
-                    ? scope === 'mobile'
-                      ? 'bg-amber-600 text-white shadow-xs'
-                      : scope === 'desktop'
-                        ? 'bg-indigo-600 text-white shadow-xs'
-                        : 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs border border-[var(--studio-border)]'
-                    : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
+                onClick={() => setRangePopoverOpen((prev) => !prev)}
+                aria-expanded={rangePopoverOpen}
+                className={`h-6 px-2 rounded-md border text-[10.5px] font-medium studio-pressable cursor-pointer ${
+                  rangePopoverOpen || breakpointScope.mode === 'custom'
+                    ? 'border-indigo-500/60 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300'
+                    : 'border-[var(--studio-border)] text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
                 }`}
               >
-                {scope === 'all' ? 'All' : scope}
+                Min / Max px
               </button>
-            ))}
-          </div>
+            </div>
+          )}
+
+          {isScoped && rangePopoverOpen && (
+            <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)] p-2 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <label className="flex-1 text-[10.5px] text-[var(--studio-muted)]">
+                  Min px
+                  <input
+                    type="number"
+                    min={0}
+                    value={minRangeDraft}
+                    onChange={(e) => setMinRangeDraft(e.target.value)}
+                    placeholder="none"
+                    className="mt-0.5 w-full h-6 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] px-1.5 font-mono-tabular text-[11px] text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                  />
+                </label>
+                <label className="flex-1 text-[10.5px] text-[var(--studio-muted)]">
+                  Max px
+                  <input
+                    type="number"
+                    min={0}
+                    value={maxRangeDraft}
+                    onChange={(e) => setMaxRangeDraft(e.target.value)}
+                    placeholder="none"
+                    className="mt-0.5 w-full h-6 rounded-md bg-[var(--studio-input)] border border-[var(--studio-border)] px-1.5 font-mono-tabular text-[11px] text-[var(--studio-text-strong)] focus:outline-none focus:border-indigo-500"
+                  />
+                </label>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-[var(--studio-muted-soft)]">
+                  Empty side = unbounded
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const parseBound = (raw: string): number | undefined => {
+                      if (raw.trim() === '') return undefined;
+                      const num = Number(raw);
+                      if (!Number.isFinite(num)) return undefined;
+                      return Math.max(120, Math.min(4000, Math.round(num)));
+                    };
+                    const minWidth = parseBound(minRangeDraft);
+                    const maxWidth = parseBound(maxRangeDraft);
+                    if (minWidth === undefined && maxWidth === undefined) return;
+                    if (minWidth !== undefined && maxWidth !== undefined && minWidth > maxWidth) {
+                      return;
+                    }
+                    const range = {
+                      ...(minWidth !== undefined ? { minWidth } : {}),
+                      ...(maxWidth !== undefined ? { maxWidth } : {}),
+                    };
+                    onChangeBreakpointScope({
+                      mode: 'custom',
+                      ...range,
+                      label: breakpointRangeToLabel(range),
+                    });
+                    setRangePopoverOpen(false);
+                  }}
+                  className="h-6 px-2.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-[10.5px] font-semibold cursor-pointer"
+                >
+                  Apply range
+                </button>
+              </div>
+            </div>
+          )}
+
+          {isScoped && hasScopeOverrides && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-1.5 space-y-1">
+              <div className="flex items-center justify-between px-0.5">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                  Overrides in {breakpointScope.label}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const clearPatch: Record<string, null> = {};
+                    for (const key of Object.keys(scopeOverrides)) {
+                      clearPatch[key] = null;
+                    }
+                    onCommitResponsiveStyle(
+                      breakpointScope,
+                      clearPatch,
+                      `Clear ${breakpointScope.label} overrides`
+                    );
+                  }}
+                  className="text-amber-700 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300 text-[10.5px] font-medium cursor-pointer"
+                >
+                  Clear all
+                </button>
+              </div>
+              {Object.entries(scopeOverrides).map(([prop, value]) => (
+                <div key={prop} className="flex items-center gap-1.5 px-0.5">
+                  <span
+                    aria-hidden="true"
+                    title={`${prop} overridden in ${breakpointScope.label}`}
+                    className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"
+                  />
+                  <span className="font-mono-tabular text-[10.5px] text-[var(--studio-text-strong)] flex-1 truncate">
+                    {prop}: {value}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onResetScopeOverride(prop)}
+                    aria-label={`Reset ${prop} override`}
+                    title={`Reset ${prop} in ${breakpointScope.label}`}
+                    className="text-[10px] font-medium text-[var(--studio-muted)] hover:text-amber-600 dark:hover:text-amber-300 cursor-pointer shrink-0"
+                  >
+                    Reset
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="flex items-center justify-between text-[11px] text-[var(--studio-muted)] px-0.5">
-            <span>{SCOPE_LABELS[responsiveScope]}</span>
-            {responsiveScope !== 'all' && hasScopeOverrides && (
-              <button
-                type="button"
-                onClick={() => {
-                  const clearPatch: Record<string, null> = {};
-                  for (const key of Object.keys(scopeOverrides)) {
-                    clearPatch[key] = null;
-                  }
-                  onCommitResponsiveStyle(
-                    responsiveScope,
-                    clearPatch,
-                    `Clear ${responsiveScope} overrides`
-                  );
-                }}
-                className="text-amber-700 dark:text-amber-400 hover:text-amber-600 dark:hover:text-amber-300 font-medium cursor-pointer"
-              >
-                Clear
-              </button>
-            )}
+            <span>
+              {isScoped
+                ? `Writes inside @media ${breakpointScope.label} only`
+                : 'Writes base styles across every screen'}
+            </span>
           </div>
         </div>
       </div>

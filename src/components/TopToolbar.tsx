@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   BarChart3,
   Blocks,
   Check,
+  Globe,
+  Monitor,
   ChevronDown,
   Columns3,
   Command,
@@ -37,6 +40,7 @@ import type {
   ViewportPreset,
 } from '../types/editor';
 import type { GitHubConnectionConfig } from '../utils/githubSync';
+import type { RepoTarget } from '../utils/repoTargets';
 import {
   GitHubCommitModal,
   type GitHubOAuthProps,
@@ -66,6 +70,11 @@ interface TopToolbarProps extends GitHubOAuthProps {
   onChangeMode: (mode: EditorMode) => void;
   viewport: ViewportPreset;
   onChangeViewport: (viewport: ViewportPreset) => void;
+  repoTargets: RepoTarget[];
+  activeRepoTargetId: string | null;
+  onChangeRepoTarget: (targetId: string) => void;
+  overlapXray: boolean;
+  onToggleOverlapXray: () => void;
   studioTheme: StudioThemeId;
   onChangeStudioTheme: (theme: StudioThemeId) => void;
   canUndo: boolean;
@@ -116,6 +125,11 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onChangeMode,
   viewport,
   onChangeViewport,
+  repoTargets,
+  activeRepoTargetId,
+  onChangeRepoTarget,
+  overlapXray,
+  onToggleOverlapXray,
   studioTheme,
   onChangeStudioTheme,
   canUndo,
@@ -281,8 +295,40 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         </div>
       </div>
 
-      {/* Center: Critical Mode Switch & Icon-Only Viewport Presets */}
+      {/* Center: Target Switch, Mode Switch & Icon-Only Viewport Presets */}
       <div className="flex items-center gap-2 shrink-0">
+        {repoTargets.length > 1 && (
+          <div
+            className="inline-flex items-center h-8 p-0.5 rounded-[10px] bg-[var(--studio-bg)] border border-[var(--studio-border)]"
+            role="group"
+            aria-label="Project Target"
+          >
+            {repoTargets.map((target) => {
+              const active = target.id === activeRepoTargetId;
+              const Icon =
+                target.kind === 'mobile' ? Smartphone : target.kind === 'desktop' ? Monitor : Globe;
+              return (
+                <button
+                  key={target.id}
+                  type="button"
+                  onClick={() => onChangeRepoTarget(target.id)}
+                  aria-pressed={active}
+                  aria-label={`Switch to ${target.label}`}
+                  title={`${target.label} · ${target.framework}${target.rootPath ? ` · ${target.rootPath}` : ''}`}
+                  className={`inline-flex items-center h-full px-2 rounded-md text-[11.5px] font-medium studio-pressable whitespace-nowrap shrink-0 cursor-pointer ${
+                    active
+                      ? 'bg-[var(--studio-surface)] text-[var(--studio-text-strong)] shadow-xs border border-[var(--studio-border)]'
+                      : 'text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] border border-transparent'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5 shrink-0" strokeWidth={1.4} />
+                  <span className="studio-reveal-label">{target.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <div
           className="inline-flex items-center h-8 p-0.5 rounded-[10px] bg-[var(--studio-bg)] border border-[var(--studio-border)]"
           role="group"
@@ -354,6 +400,22 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             );
           })}
         </div>
+
+        <button
+          type="button"
+          onClick={onToggleOverlapXray}
+          aria-pressed={overlapXray}
+          aria-label="Toggle Overlap X-Ray"
+          title="Overlap X-Ray — highlight colliding and horizontally overflowing elements at this resolution"
+          className={`inline-flex items-center h-8 px-2 rounded-md border text-[11.5px] font-medium studio-pressable whitespace-nowrap shrink-0 cursor-pointer ${
+            overlapXray
+              ? 'border-amber-500/70 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+              : 'border-[var(--studio-border)] text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)]'
+          }`}
+        >
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" strokeWidth={1.4} />
+          <span className="studio-reveal-label">Overlap X-Ray</span>
+        </button>
       </div>
 
       {/* Right: Icon-Only Utilities (Reveal on Hover) + Critical Primary Actions */}

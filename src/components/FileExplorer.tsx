@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   BarChart3,
   Blocks,
@@ -35,6 +35,8 @@ interface FileExplorerProps {
   files: ProjectFile[];
   activeFilePath: string | null;
   entryHtmlPath: string | null;
+  /** Repository-relative root of the active platform target ('' = repo root). */
+  targetRootPath?: string;
   templates: SampleTemplate[];
   activeTemplateId: string | null;
   onSelectFile: (path: string) => void;
@@ -52,6 +54,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   files,
   activeFilePath,
   entryHtmlPath,
+  targetRootPath = '',
   templates,
   activeTemplateId,
   onSelectFile,
@@ -67,12 +70,52 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
 
-  const searchResults = useMemo(
-    () => searchProjectFiles(files, searchQuery),
-    [files, searchQuery]
+  const scopePrefix = targetRootPath.replace(/\/+$/, '');
+
+  // Re-root the tree at the target folder while leaving the workspace map untouched.
+  const scopedFiles = useMemo(() => {
+    if (!scopePrefix) return files;
+    const prefix = `${scopePrefix}/`;
+    return files
+      .filter((file) => file.path.startsWith(prefix))
+      .map((file) => ({ ...file, path: file.path.slice(prefix.length) }));
+  }, [files, scopePrefix]);
+
+  const toFullPath = useCallback(
+    (path: string) => (scopePrefix ? `${scopePrefix}/${path}` : path),
+    [scopePrefix]
+  );
+  const toScopedPath = useCallback(
+    (path: string | null) => {
+      if (!path || !scopePrefix) return path;
+      const prefix = `${scopePrefix}/`;
+      return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+    },
+    [scopePrefix]
   );
 
-  const fileTree = useMemo(() => buildProjectFileTree(files), [files]);
+  const scopedActiveFilePath = toScopedPath(activeFilePath);
+  const scopedEntryHtmlPath = toScopedPath(entryHtmlPath);
+
+  const handleSelectFile = useCallback(
+    (path: string) => onSelectFile(toFullPath(path)),
+    [onSelectFile, toFullPath]
+  );
+  const handleOpenCodeEditor = useCallback(
+    (path: string, lineNumber?: number) => onOpenCodeEditor(toFullPath(path), lineNumber),
+    [onOpenCodeEditor, toFullPath]
+  );
+  const handleDownloadFile = useCallback(
+    (file: ProjectFile) => onDownloadFile({ ...file, path: toFullPath(file.path) }),
+    [onDownloadFile, toFullPath]
+  );
+
+  const searchResults = useMemo(
+    () => searchProjectFiles(scopedFiles, searchQuery),
+    [scopedFiles, searchQuery]
+  );
+
+  const fileTree = useMemo(() => buildProjectFileTree(scopedFiles), [scopedFiles]);
 
   const isSearching = searchQuery.trim().length > 0;
 
@@ -184,7 +227,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
 
       {/* File Tree / Search Results */}
       <div className="flex-1 overflow-y-auto builder-scroll px-2 py-2 space-y-0.5">
-        {files.length === 0 ? (
+        {scopedFiles.length === 0 ? (
           <div className="px-2 py-6 text-xs text-[var(--studio-muted-soft)] text-center">
             No files loaded. Upload a folder or pick a template below.
           </div>
@@ -195,8 +238,8 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
             </div>
           ) : (
             searchResults.map(({ file, lineMatches, totalLineMatches }) => {
-              const isActive = file.path === activeFilePath;
-              const isEntry = file.path === entryHtmlPath;
+              const isActive = file.path === scopedActiveFilePath;
+              const isEntry = file.path === scopedEntryHtmlPath;
               return (
                 <div key={file.path} className="space-y-0.5">
                   <FileRow
@@ -206,11 +249,11 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
                     isEntry={isEntry}
                     matchCount={totalLineMatches}
                     onSelect={() => {
-                      onSelectFile(file.path);
-                      onOpenCodeEditor(file.path, lineMatches[0]?.lineNumber);
+                      handleSelectFile(file.path);
+                      handleOpenCodeEditor(file.path, lineMatches[0]?.lineNumber);
                     }}
-                    onDoubleClick={() => onOpenCodeEditor(file.path)}
-                    onDownload={() => onDownloadFile(file)}
+                    onDoubleClick={() => handleOpenCodeEditor(file.path)}
+                    onDownload={() => handleDownloadFile(file)}
                   />
 
                   {lineMatches.length > 0 && (
@@ -219,7 +262,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
                         <button
                           key={`${file.path}-L${match.lineNumber}`}
                           type="button"
-                          onClick={() => onOpenCodeEditor(file.path, match.lineNumber)}
+                          onClick={() => handleOpenCodeEditor(file.path, match.lineNumber)}
                           className="w-full text-left flex items-baseline gap-1.5 px-1.5 py-1 rounded-md text-[11px] text-[var(--studio-muted)] hover:text-[var(--studio-text-strong)] hover:bg-[var(--studio-hover)]/70 transition-colors cursor-pointer"
                         >
                           <span className="font-mono-tabular text-indigo-600 dark:text-indigo-400 shrink-0">
@@ -239,13 +282,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
             <TreeNodeBranch
               key={node.path}
               node={node}
-              activeFilePath={activeFilePath}
-              entryHtmlPath={entryHtmlPath}
+              activeFilePath={scopedActiveFilePath}
+              entryHtmlPath={scopedEntryHtmlPath}
               collapsedFolders={collapsedFolders}
               onToggleFolder={toggleFolder}
-              onSelectFile={onSelectFile}
-              onOpenCodeEditor={onOpenCodeEditor}
-              onDownloadFile={onDownloadFile}
+              onSelectFile={handleSelectFile}
+              onOpenCodeEditor={handleOpenCodeEditor}
+              onDownloadFile={handleDownloadFile}
             />
           ))
         )}

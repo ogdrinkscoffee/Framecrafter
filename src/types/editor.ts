@@ -18,6 +18,17 @@ export type ViewportPreset = ArtboardId | 'all';
 
 export type ResponsiveScope = 'all' | 'desktop' | 'tablet' | 'mobile';
 
+/**
+ * Resolution-scoped editing target. `all` writes base styles, `preset` targets one of
+ * the built-in device ranges, and `custom` targets an arbitrary min/max px window.
+ */
+export interface BreakpointScope {
+  mode: 'all' | 'preset' | 'custom';
+  minWidth?: number;
+  maxWidth?: number;
+  label: string;
+}
+
 export type EditorMode = 'edit' | 'interact';
 
 export type CenterTab = 'preview' | 'code';
@@ -28,6 +39,21 @@ export type RightPanelTab =
   | 'seo'
   | 'global-styles'
   | 'history';
+
+export type LayoutIssueKind = 'overlap' | 'overflow';
+
+/** One collision/horizontal-overflow finding reported by the canvas X-Ray. */
+export interface LayoutIssue {
+  kind: LayoutIssueKind;
+  veId: string | null;
+  rtId: string | null;
+  uniqueSelector: string;
+  label: string;
+  width: number;
+  height: number;
+  parentDisplay?: string;
+  detail: string;
+}
 
 export interface ElementRect {
   top: number;

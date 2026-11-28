@@ -106,12 +106,14 @@ import { TopToolbar } from './components/TopToolbar';
 import type {
   ArtboardId,
   AutoSaveStatus,
+  BreakpointScope,
   CanvasZoomMode,
   CenterTab,
   DomTreeNode,
   DraggableComponentDef,
   EditorMode,
   HtmlElementPatch,
+  LayoutIssue,
   ProjectFile,
   QuickInsertKind,
   ResponsiveScope,
@@ -217,17 +219,27 @@ import {
   getRuntimeDeviceVisibilityFromCss,
 } from './utils/reactVisualSync';
 import {
+  breakpointRangeToLabel,
+  breakpointScopeToRange,
+  extractManagedSection,
   getNodeDeviceVisibility,
-  parseResponsiveCssStore,
-  serializeResponsiveCssStore,
-  upsertResponsiveStylesInCss,
+  normalizeBreakpointScope,
+  presetScopeFromRange,
+  rangeForPresetScope,
+  removeScopedDeclarations,
+  upsertScopedStylesInCss,
 } from './utils/responsiveCss';
 import { SAMPLE_TEMPLATES } from './utils/sampleTemplates';
 import {
-  detectProjectTargets,
-  getDefaultTarget,
-  type ProjectTarget,
-} from './utils/projectTargets';
+  getDefaultRepoTarget,
+  getRepoTargetById,
+  isPathInTarget,
+  resolveRepoTargetEntryPath,
+  scanRepoTargets,
+  targetPreviewPlatform,
+  type RepoTarget,
+  type RepoScanResult,
+} from './utils/repoTargets';
 import { updateHeadSeoMeta } from './utils/seoMeta';
 import {
   classifyViewportPresetFromWidth,
@@ -304,12 +316,10 @@ function AppInner() {
     return cloneProjectFiles(matchedTpl ? matchedTpl.files : startingFiles);
   });
   const [projectName, setProjectName] = useState(startingName);
-  // Multi-target workspace (Web + Mobile APK) detection for imported projects
-  const [projectTargets, setProjectTargets] = useState<ProjectTarget[]>(() =>
-    detectProjectTargets(startingFiles)
-  );
-  const [activeTargetId, setActiveTargetId] = useState<string | null>(
-    () => getDefaultTarget(detectProjectTargets(startingFiles))?.id ?? null
+  // Multi-target workspace (Web / Desktop .exe / Mobile .apk) detection for imports
+  const [repoScan, setRepoScan] = useState<RepoScanResult>(() => scanRepoTargets(startingFiles));
+  const [activeRepoTargetId, setActiveRepoTargetId] = useState<string | null>(
+    () => getDefaultRepoTarget(scanRepoTargets(startingFiles).targets)?.id ?? null
   );
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(startingTemplateId);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(
@@ -348,6 +358,11 @@ function AppInner() {
 
   // Canvas frame dimensions, zoom, outlines, DOM tree & modal
   const [canvasWidthPx, setCanvasWidthPx] = useState<number | null>(null);
+  const [breakpointScopeOverride, setBreakpointScopeOverride] = useState<BreakpointScope | null>(
+    null
+  );
+  const [overlapXray, setOverlapXray] = useState(false);
+  const [layoutIssues, setLayoutIssues] = useState<LayoutIssue[]>([]);
   const [canvasHeightPx, setCanvasHeightPx] = useState<number | null>(null);
   const [canvasZoom, setCanvasZoom] = useState<CanvasZoomMode>('100');
   const [showOutlines, setShowOutlines] = useState(false);
@@ -449,23 +464,32 @@ function AppInner() {
 
   const files = history.present.files;
 
-  // Re-detect runnable targets whenever the workspace files change (import, pull, scaffold).
+  // Re-scan runnable targets whenever the workspace files change (import, pull, scaffold).
   useEffect(() => {
-    const detected = detectProjectTargets(files);
-    setProjectTargets(detected);
-    setActiveTargetId((prev) =>
-      prev && detected.some((target) => target.id === prev) ? prev : getDefaultTarget(detected)?.id ?? null
+    const scan = scanRepoTargets(files);
+    setRepoScan(scan);
+    setActiveRepoTargetId((prev) =>
+      prev && scan.targets.some((target) => target.id === prev)
+        ? prev
+        : getDefaultRepoTarget(scan.targets)?.id ?? null
     );
   }, [files]);
 
-  const activeTarget = useMemo(
-    () => projectTargets.find((target) => target.id === activeTargetId) ?? null,
-    [projectTargets, activeTargetId]
+  const activeRepoTarget = useMemo(
+    () => getRepoTargetById(repoScan.targets, activeRepoTargetId),
+    [repoScan, activeRepoTargetId]
   );
 
+  const previewPlatform = activeRepoTarget
+    ? targetPreviewPlatform(activeRepoTarget.kind)
+    : 'browser';
+
   const htmlPages = useMemo(
-    () => files.filter((f) => f.type === 'html').map((f) => f.path),
-    [files]
+    () =>
+      files
+        .filter((f) => f.type === 'html' && isPathInTarget(f.path, activeRepoTarget))
+        .map((f) => f.path),
+    [files, activeRepoTarget]
   );
 
   const projectImageAssets = useMemo(
@@ -474,16 +498,33 @@ function AppInner() {
   );
 
   const entryHtmlPath = useMemo(() => {
-    if (activePreviewHtmlPath && files.some((f) => f.path === activePreviewHtmlPath)) {
+    // Prefer an explicitly opened page, but only while it belongs to the active target.
+    if (
+      activePreviewHtmlPath &&
+      files.some((f) => f.path === activePreviewHtmlPath) &&
+      isPathInTarget(activePreviewHtmlPath, activeRepoTarget)
+    ) {
       return activePreviewHtmlPath;
     }
+    const targetEntry = resolveRepoTargetEntryPath(files, activeRepoTarget);
+    if (targetEntry) return targetEntry;
     return findEntryHtmlPath(files);
-  }, [activePreviewHtmlPath, files]);
+  }, [activePreviewHtmlPath, files, activeRepoTarget]);
 
   const activeHtmlFile = useMemo(
     () => (entryHtmlPath ? files.find((f) => f.path === entryHtmlPath) ?? null : null),
     [files, entryHtmlPath]
   );
+
+  const activeBreakpointScope: BreakpointScope = useMemo(() => {
+    if (breakpointScopeOverride) return breakpointScopeOverride;
+    if (responsiveScope === 'all') return { mode: 'all', label: 'All Screens' };
+    const range = rangeForPresetScope(responsiveScope);
+    return { mode: 'preset', ...range, label: breakpointRangeToLabel(range) };
+  }, [breakpointScopeOverride, responsiveScope]);
+
+  const activeBreakpointScopeRef = useRef(activeBreakpointScope);
+  activeBreakpointScopeRef.current = activeBreakpointScope;
 
   const primaryCssFile = useMemo(() => {
     return (
@@ -735,6 +776,24 @@ function AppInner() {
     [editorMode, activePreviewHtmlPath, getStaticScriptSignature, showToast]
   );
 
+  /** Switches platform target: re-roots the preview/file tree and opens its config inspector. */
+  const handleChangeRepoTarget = useCallback(
+    (targetId: string) => {
+      const target = getRepoTargetById(repoScan.targets, targetId);
+      if (!target) return;
+      setActiveRepoTargetId(targetId);
+      setSelectedElement(null);
+      setDomTree([]);
+      const nextEntry = resolveRepoTargetEntryPath(files, target);
+      setActivePreviewHtmlPath(nextEntry);
+      if (nextEntry) setActiveFilePath(nextEntry);
+      setRightSidebarCollapsed(false);
+      setRightPanelTab('seo');
+      rebuildPreview(files, editorMode, null, nextEntry);
+    },
+    [repoScan, files, editorMode, rebuildPreview]
+  );
+
   const hotSyncIframe = useCallback(
     (
       nextFiles: ProjectFile[],
@@ -777,7 +836,7 @@ function AppInner() {
               nextFiles.find((f) => f.type === 'css') ??
               null;
             const liveResponsiveCss = nextCssFile
-              ? serializeResponsiveCssStore(parseResponsiveCssStore(nextCssFile.content))
+              ? extractManagedSection(nextCssFile.content)
               : '';
             postToIframe(
               {
@@ -907,6 +966,7 @@ function AppInner() {
 
   const handleChangeViewport = useCallback((nextViewport: ViewportPreset) => {
     const prevViewport = viewportRef.current;
+    setBreakpointScopeOverride(null);
     setViewport(nextViewport);
     setCanvasWidthPx(null);
     if (nextViewport === 'all') {
@@ -941,6 +1001,7 @@ function AppInner() {
     (boardId: ArtboardId) => {
       activeArtboardRef.current = boardId;
       setActiveArtboard(boardId);
+      setBreakpointScopeOverride(null);
       setResponsiveScope(boardId);
       const currentSelected = selectedElementRef.current;
       if (currentSelected && viewportRef.current === 'all') {
@@ -967,8 +1028,160 @@ function AppInner() {
     if (widthPx !== null) {
       const matchedPreset = classifyViewportPresetFromWidth(widthPx);
       setViewport(matchedPreset);
+      // Scrubbing across the ruler retargets the inspector's edit scope so the next
+      // edit lands in the breakpoint the user is actually looking at.
+      setBreakpointScopeOverride(null);
+      setResponsiveScope(
+        matchedPreset === 'mobile'
+          ? 'mobile'
+          : matchedPreset === 'tablet'
+            ? 'tablet'
+            : 'desktop'
+      );
     }
   }, []);
+
+  const handleChangeBreakpointScope = useCallback((scope: BreakpointScope) => {
+    if (scope.mode === 'all') {
+      setBreakpointScopeOverride(null);
+      setResponsiveScope('all');
+      return;
+    }
+    const range = breakpointScopeToRange(scope);
+    if (!range) {
+      setBreakpointScopeOverride(null);
+      setResponsiveScope('all');
+      return;
+    }
+    setBreakpointScopeOverride(scope);
+    const preset = presetScopeFromRange(range);
+    if (preset) {
+      setResponsiveScope(preset);
+      return;
+    }
+    // Custom window: keep the preset label in sync with the range's widest side so
+    // runtime (React) overrides still serialize into the closest legacy block.
+    const probeWidth =
+      range.maxWidth !== undefined
+        ? range.maxWidth
+        : range.minWidth !== undefined
+          ? range.minWidth
+          : 1440;
+    const presetFromProbe = classifyViewportPresetFromWidth(probeWidth);
+    setResponsiveScope(presetFromProbe === 'all' ? 'desktop' : presetFromProbe);
+  }, []);
+
+  const handleToggleOverlapXray = useCallback(() => {
+    setOverlapXray((prev) => {
+      const next = !prev;
+      postToIframe({ type: 'SET_OVERLAP_XRAY', enabled: next }, 'all');
+      if (!next) setLayoutIssues([]);
+      return next;
+    });
+  }, [postToIframe]);
+
+  const handleResetBreakpointOverride = useCallback(
+    (property: string) => {
+      if (!selectedElement?.veNode || !entryHtmlPath) {
+        showToast('Select an element with a saved source node first');
+        return;
+      }
+      const targetCssPath = primaryCssFile ? primaryCssFile.path : 'responsive.css';
+      const existingCss = files.find((f) => f.path === targetCssPath);
+      if (!existingCss) return;
+      const scope = activeBreakpointScopeRef.current;
+      const nextCss = removeScopedDeclarations(
+        existingCss.content,
+        selectedElement.veNode,
+        scope,
+        [property]
+      );
+      const nextFiles = files.map((f) =>
+        f.path === targetCssPath ? { ...f, content: nextCss } : f
+      );
+      setHistory((prevHistory) =>
+        pushHistoryState(prevHistory, nextFiles, `Reset ${property} (${scope.label})`)
+      );
+      postToIframe({ type: 'HOT_PATCH_CSS', cssSources: { [targetCssPath]: nextCss } }, 'all');
+      postToIframe(
+        { type: 'LIVE_CSS_OVERRIDE', cssText: extractManagedSection(nextCss) },
+        'all'
+      );
+    },
+    [selectedElement, entryHtmlPath, primaryCssFile, files, postToIframe, showToast]
+  );
+
+  const handleAutoFixLayoutIssue = useCallback(
+    (issue: LayoutIssue) => {
+      const scope = activeBreakpointScopeRef.current;
+      if (!issue.veId) {
+        showToast('Auto-fix needs an element from the project HTML (runtime nodes are read-only)');
+        return;
+      }
+      if (!entryHtmlPath) return;
+      const htmlFile = files.find((f) => f.path === entryHtmlPath);
+      if (!htmlFile) return;
+      const ensured = ensureElementNodeAttr(htmlFile.content, issue.veId);
+      if (!ensured.nodeId) {
+        showToast('Could not resolve that element in the source HTML');
+        return;
+      }
+      const targetCssPath = primaryCssFile ? primaryCssFile.path : 'responsive.css';
+      const patch: Record<string, string> =
+        issue.kind === 'overflow'
+          ? {
+              'min-width': '0',
+              'max-width': '100%',
+              'overflow-wrap': 'anywhere',
+              'box-sizing': 'border-box',
+            }
+          : issue.parentDisplay === 'grid'
+            ? { 'grid-template-columns': 'minmax(0, 1fr)', 'min-width': '0' }
+            : { 'flex-wrap': 'wrap', 'min-width': '0' };
+      const updatedHtml = ensureStylesheetLinkInHtml(ensured.html, targetCssPath);
+      const existingCss = files.find((f) => f.path === targetCssPath);
+      const nextCss = upsertScopedStylesInCss(
+        existingCss?.content ?? '',
+        ensured.nodeId,
+        scope,
+        patch
+      );
+      const nextFiles = files.map((f) =>
+        f.path === entryHtmlPath
+          ? { ...f, content: updatedHtml }
+          : f.path === targetCssPath
+            ? { ...f, content: nextCss }
+            : f
+      );
+      if (!existingCss) {
+        nextFiles.push({
+          path: targetCssPath,
+          name: targetCssPath,
+          type: 'css',
+          content: nextCss,
+        });
+        nextFiles.sort((a, b) => a.path.localeCompare(b.path));
+      }
+      setHistory((prevHistory) =>
+        pushHistoryState(
+          prevHistory,
+          nextFiles,
+          `Auto-fix ${issue.kind} (${scope.label})`
+        )
+      );
+      postToIframe({ type: 'ASSIGN_VE_NODE', nodeId: ensured.nodeId }, 'all');
+      postToIframe({ type: 'HOT_PATCH_CSS', cssSources: { [targetCssPath]: nextCss } }, 'all');
+      postToIframe(
+        { type: 'LIVE_CSS_OVERRIDE', cssText: extractManagedSection(nextCss) },
+        'all'
+      );
+      window.setTimeout(() => {
+        postToIframe({ type: 'RUN_OVERLAP_SCAN' }, 'all');
+      }, 260);
+      showToast(`Auto-fixed ${issue.kind} for ${scope.label}`);
+    },
+    [entryHtmlPath, primaryCssFile, files, postToIframe, showToast]
+  );
 
   const handleToggleOutlines = useCallback(() => {
     setShowOutlines((prev) => {
@@ -1006,6 +1219,11 @@ function AppInner() {
     const onMessage = (event: MessageEvent) => {
       const data = event.data;
       if (!data || data.source !== 've-iframe') return;
+
+      if (data.type === 'OVERLAP_REPORT') {
+        setLayoutIssues(Array.isArray(data.issues) ? (data.issues as LayoutIssue[]) : []);
+        return;
+      }
 
       if (data.type === 'IFRAME_KEYDOWN') {
         const action = matchShortcutAction(
@@ -1054,6 +1272,7 @@ function AppInner() {
         const target = srcArtboard ?? 'all';
         postToIframe({ type: 'SET_MODE', mode: editorMode }, target);
         postToIframe({ type: 'SET_OUTLINES', enabled: showOutlines }, target);
+        postToIframe({ type: 'SET_OVERLAP_XRAY', enabled: overlapXray }, target);
         if (
           viewportRef.current === 'all' &&
           srcArtboard &&
@@ -1342,6 +1561,7 @@ function AppInner() {
     globalFindReplaceOpen,
     showStartHub,
     showOutlines,
+    overlapXray,
     resetAiCopilotState,
   ]);
 
@@ -1458,6 +1678,7 @@ function AppInner() {
               type: 'PREVIEW_RESPONSIVE_STYLE',
               selector: previewSelector,
               scope: responsiveScope,
+              breakpoint: breakpointScopeToRange(activeBreakpointScope),
               styles,
             },
             'all'
@@ -1469,7 +1690,7 @@ function AppInner() {
         postToIframe({ type: 'PREVIEW_STYLE', styles }, 'all');
       }
     },
-    [postToIframe, responsiveScope, selectedElement]
+    [postToIframe, responsiveScope, selectedElement, activeBreakpointScope]
   );
 
   const handleCommitStyle = useCallback(
@@ -1489,8 +1710,17 @@ function AppInner() {
 
   // Breakpoint-specific responsive CSS commit (Desktop / Tablet / Mobile)
   const handleCommitResponsiveStyle = useCallback(
-    (scope: ResponsiveScope, styles: Record<string, string | null>, label: string) => {
+    (
+      scope: ResponsiveScope | BreakpointScope,
+      styles: Record<string, string | null>,
+      label: string
+    ) => {
       if (!selectedElement) return;
+      const normalizedScope = normalizeBreakpointScope(scope);
+      const scopeRange = breakpointScopeToRange(normalizedScope);
+      const legacyScope: ResponsiveScope = scopeRange
+        ? presetScopeFromRange(scopeRange) ?? 'all'
+        : 'all';
       const fontPatch = styles['font-family'];
       const googleFontHref = fontPatch
         ? buildGoogleFontsHref(collectUsedGoogleFonts([fontPatch]))
@@ -1499,7 +1729,7 @@ function AppInner() {
       if (!selectedElement.veId || !entryHtmlPath) {
         const sel = selectedElement.uniqueSelector || selectedElement.selectorPath;
         if (!sel) return;
-        let nextFiles = applyRuntimeStylePatchToFiles(files, sel, styles, scope);
+        let nextFiles = applyRuntimeStylePatchToFiles(files, sel, styles, legacyScope);
         if (fontPatch && entryHtmlPath) {
           nextFiles = nextFiles.map((file) =>
             file.path === entryHtmlPath
@@ -1540,10 +1770,10 @@ function AppInner() {
         updatedHtml = ensureGoogleFontInHtml(updatedHtml, fontPatch);
       }
       const existingCssFile = files.find((f) => f.path === targetCssPath);
-      const nextCssContent = upsertResponsiveStylesInCss(
+      const nextCssContent = upsertScopedStylesInCss(
         existingCssFile?.content ?? '',
         ensured.nodeId,
-        scope,
+        normalizedScope,
         styles
       );
 
@@ -1567,7 +1797,7 @@ function AppInner() {
 
       setHistory((prevHistory) => pushHistoryState(prevHistory, nextFiles, label));
       postToIframe({ type: 'ASSIGN_VE_NODE', nodeId: ensured.nodeId }, 'all');
-      const managedCss = serializeResponsiveCssStore(parseResponsiveCssStore(nextCssContent));
+      const managedCss = extractManagedSection(nextCssContent);
       postToIframe({ type: 'LIVE_CSS_OVERRIDE', cssText: managedCss }, 'all');
       postToIframe(
         {
@@ -4014,6 +4244,12 @@ function AppInner() {
           templates={SAMPLE_TEMPLATES}
           currentProjectName={projectName}
           currentFileCount={files.length}
+          repoTargets={repoScan.targets}
+          repoLayout={repoScan.layout}
+          onSelectRepoTarget={(targetId) => {
+            handleChangeRepoTarget(targetId);
+            setShowStartHub(false);
+          }}
           studioTheme={studioTheme}
           onChangeStudioTheme={setStudioTheme}
           onResumeWorkspace={() => setShowStartHub(false)}
@@ -4047,6 +4283,9 @@ function AppInner() {
             onChangeMode={handleChangeMode}
             viewport={viewport}
             onChangeViewport={handleChangeViewport}
+            repoTargets={repoScan.targets}
+            activeRepoTargetId={activeRepoTargetId}
+            onChangeRepoTarget={handleChangeRepoTarget}
             studioTheme={studioTheme}
             onChangeStudioTheme={setStudioTheme}
             canUndo={history.past.length > 0}
@@ -4066,6 +4305,8 @@ function AppInner() {
             onOpenCommandPalette={() => setCommandPaletteOpen(true)}
             onOpenShortcuts={() => setShortcutsModalOpen(true)}
             onOpenProjectStats={() => setStatsModalOpen(true)}
+            overlapXray={overlapXray}
+            onToggleOverlapXray={handleToggleOverlapXray}
             historyTimelineActive={!rightSidebarCollapsed && rightPanelTab === 'history'}
             onOpenHistoryTimeline={handleOpenHistoryTimeline}
             componentLibraryOpen={componentLibraryOpen && !leftSidebarCollapsed}
@@ -4183,6 +4424,7 @@ function AppInner() {
                 files={files}
                 activeFilePath={activeFilePath}
                 entryHtmlPath={entryHtmlPath}
+                targetRootPath={activeRepoTarget?.rootPath ?? ''}
                 templates={SAMPLE_TEMPLATES}
                 activeTemplateId={activeTemplateId}
                 onSelectFile={(path) => {
@@ -4244,6 +4486,7 @@ function AppInner() {
           }
           viewport={viewport}
           onChangeViewport={handleChangeViewport}
+          previewPlatform={previewPlatform}
           activeArtboard={activeArtboard}
           onSelectArtboard={handleSelectArtboard}
           onRegisterArtboardIframe={registerArtboardIframe}
@@ -4287,6 +4530,9 @@ function AppInner() {
           onUpdateCodeContent={handleUpdateCodeContent}
           onPostIframeMessage={postToIframe}
           onDropComponentOnCanvas={handleDropComponentOnCanvas}
+          overlapXray={overlapXray}
+          layoutIssues={layoutIssues}
+          onAutoFixLayoutIssue={handleAutoFixLayoutIssue}
           aiCopilot={aiCopilot}
         />
 
@@ -4364,6 +4610,11 @@ function AppInner() {
               onToggleAspectRatioLock={handleToggleAspectRatioLock}
               responsiveScope={responsiveScope}
               onChangeResponsiveScope={setResponsiveScope}
+              breakpointScope={activeBreakpointScope}
+              onChangeBreakpointScope={handleChangeBreakpointScope}
+              onResetScopeOverride={handleResetBreakpointOverride}
+              platformTarget={activeRepoTarget}
+              projectFiles={files}
               activeHtmlPath={entryHtmlPath}
               activeHtmlContent={activeHtmlFile?.content ?? ''}
               htmlPages={htmlPages}

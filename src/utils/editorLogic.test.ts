@@ -85,11 +85,25 @@ import {
 import { computeProjectStatistics } from './projectStats';
 import { replaceAcrossProjectFiles, searchAllProjectFiles } from './globalFindReplace';
 import {
+  breakpointRangeToLabel,
+  breakpointScopeToRange,
   getNodeDeviceVisibility,
   getResponsiveNodeStyles,
   parseResponsiveCssStore,
+  parseScopedMediaBlocks,
+  removeScopedDeclarations,
+  resolveScopedProperty,
+  resolveScopedStyles,
   upsertResponsiveStylesInCss,
+  upsertScopedStylesInCss,
 } from './responsiveCss';
+import { findSiblingOverlaps, isHorizontallyOverflowing } from './layoutAudit';
+import {
+  getDefaultRepoTarget,
+  resolveRepoTargetEntryPath,
+  resolveRepoTargetFiles,
+  scanRepoTargets,
+} from './repoTargets';
 import { parseHeadSeoMeta, updateHeadSeoMeta } from './seoMeta';
 import {
   deleteRootCssVariable,
@@ -1897,3 +1911,215 @@ test('exportProject builds structured JSON and sanitizes SVG/XHTML snapshot docu
   assert.doesNotThrow(() => new Function(jsBody));
 });
 
+
+test('responsiveCss parses min-width/max-width ranges into scoped media blocks', () => {
+  let css = 'body { color: #111; }\n';
+  css = upsertScopedStylesInCss(
+    css,
+    'n-1',
+    { mode: 'custom', minWidth: 768, maxWidth: 1023, label: '768-1023px' },
+    { 'font-size': '20px' }
+  );
+  css = upsertScopedStylesInCss(
+    css,
+    'n-1',
+    { mode: 'custom', minWidth: 1024, label: '>=1024px' },
+    { 'max-width': '1200px' }
+  );
+  css = upsertScopedStylesInCss(
+    css,
+    'n-1',
+    { mode: 'custom', maxWidth: 767, label: '<=767px' },
+    { display: 'none' }
+  );
+
+  assert.ok(css.includes('@media (min-width: 768px) and (max-width: 1023px)'));
+  assert.ok(css.includes('@media (min-width: 1024px)'));
+  assert.ok(css.includes('@media (max-width: 767px)'));
+  assert.ok(css.includes('body { color: #111; }'));
+
+  const parsed = parseScopedMediaBlocks(css);
+  assert.equal(parsed.blocks.length, 3);
+  const midRange = parsed.blocks.find((b) => b.range.minWidth === 768);
+  assert.equal(midRange?.range.maxWidth, 1023);
+  assert.equal(midRange?.rules['n-1']['font-size'], '20px');
+
+  assert.equal(
+    breakpointRangeToLabel(breakpointScopeToRange({ mode: 'custom', maxWidth: 480, label: '' })),
+    '≤ 480px'
+  );
+  assert.equal(
+    breakpointRangeToLabel(
+      breakpointScopeToRange({ mode: 'custom', minWidth: 600, maxWidth: 900, label: '' })
+    ),
+    '600–900px'
+  );
+});
+
+test('responsiveCss merges scoped patches without clobbering base rules or duplicating blocks', () => {
+  const scope = { mode: 'custom' as const, minWidth: 768, maxWidth: 1023, label: '768-1023px' };
+  let css = upsertScopedStylesInCss('', 'n-1', 'all', { 'font-size': '14px' });
+  css = upsertScopedStylesInCss(css, 'n-1', scope, { 'font-size': '20px' });
+  css = upsertScopedStylesInCss(css, 'n-1', scope, { 'line-height': '1.4' });
+
+  const blockCount = css.split('@media (min-width: 768px) and (max-width: 1023px)').length - 1;
+  const selectorCount = css.split('[data-ve-node="n-1"]').length - 1;
+  assert.equal(blockCount, 1);
+  assert.equal(selectorCount, 2); // one base rule + one media rule
+
+  const parsed = parseScopedMediaBlocks(css);
+  assert.deepEqual(parsed.base['n-1'], { 'font-size': '14px' });
+  assert.deepEqual(parsed.blocks[0].rules['n-1'], {
+    'font-size': '20px',
+    'line-height': '1.4',
+  });
+});
+
+test('responsiveCss resolves base vs scoped values and resets only the media declaration', () => {
+  const mobileScope = { mode: 'custom' as const, maxWidth: 767, label: '<=767px' };
+  let css = upsertScopedStylesInCss('', 'n-1', 'all', { 'font-size': '14px' });
+  css = upsertScopedStylesInCss(css, 'n-1', mobileScope, { 'font-size': '11px' });
+
+  const scoped = resolveScopedProperty(css, 'n-1', 'font-size', 500, '14px');
+  assert.equal(scoped.value, '11px');
+  assert.equal(scoped.source, 'scoped');
+
+  const wide = resolveScopedProperty(css, 'n-1', 'font-size', 1200, '14px');
+  assert.equal(wide.value, '14px');
+  assert.equal(wide.source, 'base');
+
+  assert.equal(resolveScopedProperty(css, 'n-1', 'color', 500, 'red').source, 'inline');
+  assert.deepEqual(resolveScopedStyles(css, 'n-1', 400), { 'font-size': '11px' });
+
+  const reset = removeScopedDeclarations(css, 'n-1', mobileScope, ['font-size']);
+  assert.ok(!reset.includes('@media (max-width: 767px)'));
+  assert.equal(resolveScopedProperty(reset, 'n-1', 'font-size', 400, '14px').source, 'base');
+  assert.equal(resolveScopedProperty(reset, 'n-1', 'font-size', 400, '14px').value, '14px');
+});
+
+test('layoutAudit detects sibling bounding-box overlaps and horizontal overflow', () => {
+  const overlaps = findSiblingOverlaps([
+    { id: 'a', left: 0, top: 0, right: 200, bottom: 80 },
+    { id: 'b', left: 120, top: 0, right: 320, bottom: 80 },
+    { id: 'c', left: 0, top: 200, right: 200, bottom: 280 },
+    { id: 'd', left: 190, top: 200, right: 300, bottom: 280 },
+  ]);
+
+  assert.equal(overlaps.length, 2);
+  assert.deepEqual(
+    overlaps.map((o) => [o.a, o.b]),
+    [
+      ['a', 'b'],
+      ['c', 'd'],
+    ]
+  );
+  assert.equal(overlaps[0].overlapWidth, 80);
+  assert.equal(overlaps[0].overlapHeight, 80);
+
+  assert.equal(findSiblingOverlaps([{ id: 'x', left: 0, top: 0, right: 100, bottom: 40 }]).length, 0);
+  assert.equal(isHorizontallyOverflowing(420, 375), true);
+  assert.equal(isHorizontallyOverflowing(375, 375), false);
+});
+
+function repoFile(path: string, content = ''): { path: string; name: string; type: ReturnType<typeof detectFileType>; content: string } {
+  return { path, name: path.split('/').pop() || path, type: detectFileType(path), content };
+}
+
+test('repoTargets classifies a single-web repository at the root', () => {
+  const files = [
+    repoFile('index.html', '<html><body><div id="root"></div></body></html>'),
+    repoFile('package.json', JSON.stringify({ dependencies: { react: '^19.0.0', vite: '^8.0.0' } })),
+    repoFile('vite.config.ts', 'export default {}'),
+    repoFile('src/main.tsx', 'console.log("hi")'),
+  ].map((f) => f as never);
+
+  const scan = scanRepoTargets(files as unknown as Parameters<typeof scanRepoTargets>[0]);
+  assert.equal(scan.layout, 'single');
+  assert.equal(scan.isSharedUi, false);
+  assert.equal(scan.isMonorepo, false);
+  assert.equal(scan.targets.length, 1);
+  assert.equal(scan.targets[0].kind, 'web');
+  assert.equal(scan.targets[0].rootPath, '');
+  assert.equal(scan.targets[0].framework, 'react');
+  assert.equal(getDefaultRepoTarget(scan.targets)?.id, scan.targets[0].id);
+  assert.equal(resolveRepoTargetEntryPath(files as never, scan.targets[0]), 'index.html');
+});
+
+test('repoTargets detects a shared Electron + Capacitor UI like Framecraft itself', () => {
+  const files = [
+    repoFile('index.html', '<html><body></body></html>'),
+    repoFile(
+      'package.json',
+      JSON.stringify({
+        name: 'framecrafter',
+        main: 'electron/main.cjs',
+        dependencies: { '@capacitor/core': '^6.0.0', react: '^19.0.0' },
+        devDependencies: { electron: '^39.0.0', vite: '^8.0.0' },
+      })
+    ),
+    repoFile('electron/main.cjs', 'const win = new BrowserWindow({ width: 1440, height: 900 })'),
+    repoFile('electron-builder.json', JSON.stringify({ appId: 'co.framecraft.studio' })),
+    repoFile('capacitor.config.ts', "export default { appId: 'co.framecraft.app', appName: 'Framecraft', webDir: 'dist' };"),
+    repoFile('android/app/build.gradle', 'applicationId "co.framecraft.app"'),
+  ].map((f) => f as never);
+
+  const scan = scanRepoTargets(files as unknown as Parameters<typeof scanRepoTargets>[0]);
+  assert.equal(scan.layout, 'shared-ui');
+  assert.equal(scan.isSharedUi, true);
+  assert.equal(scan.isMonorepo, false);
+  assert.deepEqual(
+    scan.targets.map((t) => t.kind),
+    ['web', 'desktop', 'mobile']
+  );
+  assert.ok(scan.targets.every((t) => t.rootPath === '' && t.sharedUi));
+  assert.equal(scan.targets[1].framework, 'electron');
+  assert.equal(scan.targets[1].configPath, 'electron-builder.json');
+  assert.equal(scan.targets[2].framework, 'capacitor');
+  assert.equal(scan.targets[2].configPath, 'capacitor.config.ts');
+  assert.ok(scan.warnings[0].includes('Shared UI'));
+});
+
+test('repoTargets detects multi-folder monorepos and re-roots files per target', () => {
+  const files = [
+    repoFile('package.json', JSON.stringify({ private: true, workspaces: ['apps/*'] })),
+    repoFile('apps/web/index.html', '<html><body>web</body></html>'),
+    repoFile('apps/web/package.json', JSON.stringify({ dependencies: { vite: '^8.0.0', react: '^19.0.0' } })),
+    repoFile('apps/web/src/main.tsx', 'export default null'),
+    repoFile('apps/desktop/package.json', JSON.stringify({ main: 'electron/main.cjs', devDependencies: { electron: '^39.0.0' } })),
+    repoFile('apps/desktop/electron/main.cjs', 'BrowserWindow'),
+    repoFile('apps/mobile/index.html', '<html><body>mobile</body></html>'),
+    repoFile('apps/mobile/package.json', JSON.stringify({ dependencies: { '@capacitor/core': '^6.0.0' } })),
+    repoFile('apps/mobile/capacitor.config.ts', "export default { appId: 'co.app.mobile', appName: 'App', webDir: 'www' };"),
+  ].map((f) => f as never);
+
+  const scan = scanRepoTargets(files as unknown as Parameters<typeof scanRepoTargets>[0]);
+  assert.equal(scan.layout, 'monorepo');
+  assert.equal(scan.isMonorepo, true);
+  assert.equal(scan.isSharedUi, false);
+  // apps/mobile carries both an index.html and a Capacitor config, so it is a
+  // web entry as well as a mobile target; every target still has its own root.
+  assert.deepEqual(
+    scan.targets.map((t) => `${t.kind}:${t.rootPath}`),
+    ['web:apps/mobile', 'web:apps/web', 'desktop:apps/desktop', 'mobile:apps/mobile']
+  );
+  assert.ok(scan.targets.every((t) => t.sharedUi === false));
+
+  const webTarget = scan.targets.find((t) => t.kind === 'web' && t.rootPath === 'apps/web');
+  assert.ok(webTarget);
+  assert.equal(webTarget.entryFile, 'apps/web/index.html');
+  assert.equal(getDefaultRepoTarget(scan.targets)?.rootPath, 'apps/web');
+  assert.equal(resolveRepoTargetEntryPath(files as never, webTarget), 'apps/web/index.html');
+
+  const scoped = resolveRepoTargetFiles(files as never, webTarget);
+  assert.deepEqual(
+    scoped.map((f) => f.path),
+    ['index.html', 'package.json', 'src/main.tsx']
+  );
+  // The full workspace map is untouched, so history/GitHub keep every target.
+  assert.equal(files.length, 9);
+
+  const mobileTarget = scan.targets.find((t) => t.kind === 'mobile');
+  assert.ok(mobileTarget);
+  assert.equal(mobileTarget.rootPath, 'apps/mobile');
+  assert.equal(resolveRepoTargetEntryPath(files as never, mobileTarget), 'apps/mobile/index.html');
+});
