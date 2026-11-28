@@ -1,6 +1,8 @@
 import type { BundleInputFile } from '../../serverBundler';
 import type { ProjectFile } from '../types/editor';
-import { parseGitHubRepoUrl } from './githubSync';
+// Explicit extension: `npm start` runs `node server.ts` with Node's native ESM
+// resolver, which does not infer `.ts` the way tsx/Vite do.
+import { parseGitHubRepoUrl } from './githubSync.ts';
 
 const MAX_FILES_PER_REQUEST = 600;
 const MAX_PATH_LEN = 512;

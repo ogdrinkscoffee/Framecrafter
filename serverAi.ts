@@ -65,6 +65,10 @@ export async function editElementWithGemini(
   input: AiEditElementPayload
 ): Promise<EditElementWithGeminiResult> {
   const apiKey = process.env.GEMINI_API_KEY?.trim() || '';
+  // Deliberately only ever logs whether the key exists, never its value or the
+  // surrounding environment (that would leak GITHUB_CLIENT_SECRET and friends
+  // into server logs).
+  console.error('[Gemini] GEMINI_API_KEY configured:', apiKey ? 'yes' : 'no');
   if (!apiKey) {
     return {
       ok: false,
@@ -80,13 +84,14 @@ export async function editElementWithGemini(
       headers: {
         'User-Agent': 'aistudio-build',
       },
+      // Enforced by the SDK on the actual request. A bare AbortController would
+      // only set a local flag and never cancel the call.
+      timeout: GEMINI_TIMEOUT_MS,
     },
   });
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), GEMINI_TIMEOUT_MS);
-
+    console.error('[Gemini] generateContent call starting: model=' + GEMINI_MODEL + ' timeoutMs=' + GEMINI_TIMEOUT_MS);
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
       contents: buildUserPrompt(input),
@@ -112,13 +117,7 @@ export async function editElementWithGemini(
     });
 
     const rawText = (response.text ?? '').trim();
-    if (controller.signal.aborted) {
-      return {
-        ok: false,
-        status: 504,
-        error: 'AI Co-Pilot request timed out. Please try again.',
-      };
-    }
+    console.error('[Gemini] generateContent response received; rawTextLen=' + rawText.length);
 
     if (!rawText) {
       return {
@@ -156,8 +155,7 @@ export async function editElementWithGemini(
       };
     }
 
-    clearTimeout(timeout);
-
+    console.error('[Gemini] generateContent success: updatedCodeLen=' + updatedCode.length);
     return {
       ok: true,
       updatedCode,
@@ -169,10 +167,15 @@ export async function editElementWithGemini(
         ? ((err as { status: number }).status)
         : 0;
     const message = err instanceof Error ? err.message : '';
-    console.error('Gemini edit-element error:', statusCode || message);
+    const errName = err instanceof Error ? err.name : '';
+    console.error('Gemini edit-element error: status=' + (statusCode || 'n/a') + ' name=' + (errName || 'n/a') + ' message=' + (message || 'n/a'));
 
-    // Treat AbortError from our timeout as a 504, not a generic 502.
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    // The SDK raises a timeout/abort error when httpOptions.timeout elapses.
+    if (
+      errName === 'AbortError' ||
+      errName === 'TimeoutError' ||
+      /timed? ?out|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/i.test(message)
+    ) {
       return {
         ok: false,
         status: 504,
