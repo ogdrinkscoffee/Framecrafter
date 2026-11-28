@@ -27,6 +27,7 @@ import {
 import { DRAGGABLE_COMPONENTS } from '../utils/componentCatalog';
 import { STUDIO_FONT_CATALOG } from '../utils/fontLibrary';
 import { SAMPLE_TEMPLATES } from '../utils/sampleTemplates';
+import { useModalFocus } from '../utils/useModalFocus';
 
 export interface CommandItem {
   id: string;
@@ -101,6 +102,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus(open, panelRef);
 
   useEffect(() => {
     if (open) {
@@ -379,7 +383,11 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-xl studio-modal-panel rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="w-full max-w-xl studio-modal-panel rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden"
+      >
         <div className="px-3.5 py-2.5 border-b border-[var(--studio-border)] flex items-center gap-2.5">
           <Search className="w-4 h-4 text-[var(--studio-muted)] shrink-0" strokeWidth={1.6} />
           <input

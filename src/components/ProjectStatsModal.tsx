@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, Code2, FileCode2, Files, HardDrive, X } from 'lucide-react';
 import type { ProjectFile } from '../types/editor';
 import {
@@ -6,6 +6,7 @@ import {
   formatBytesCompact,
   type StatsDistributionKey,
 } from '../utils/projectStats';
+import { useModalFocus } from '../utils/useModalFocus';
 
 interface ProjectStatsModalProps {
   open: boolean;
@@ -26,6 +27,9 @@ export const ProjectStatsModal: React.FC<ProjectStatsModalProps> = ({
 }) => {
   const [metric, setMetric] = useState<DistributionMetric>('lines');
   const [hoveredKey, setHoveredKey] = useState<StatsDistributionKey | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus(open, panelRef);
 
   useEffect(() => {
     if (!open) return;
@@ -111,7 +115,11 @@ export const ProjectStatsModal: React.FC<ProjectStatsModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-3xl max-h-[90dvh] studio-modal-panel flex flex-col rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="w-full max-w-3xl max-h-[90dvh] studio-modal-panel flex flex-col rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden"
+      >
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-[var(--studio-border)] flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">

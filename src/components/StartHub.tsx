@@ -372,48 +372,50 @@ export const StartHub: React.FC<StartHubProps> = ({
       />
 
       {/* Minimal Header */}
-      <header className="sticky top-0 z-20 h-14 shrink-0 border-b border-[var(--studio-border)] bg-[var(--studio-surface)]/80 backdrop-blur-xl px-6 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2.5">
+      <header className="sticky top-0 z-20 h-14 shrink-0 border-b border-[var(--studio-border)] bg-[var(--studio-surface)]/80 backdrop-blur-xl px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4">
+        <div className="flex min-w-0 items-center gap-2.5">
           <FramecraftLogoMark className="w-6 h-6" />
-          <span className="font-display font-semibold text-[15px] tracking-[-0.02em] text-[var(--studio-text-strong)]">
+          <span className="font-display font-semibold text-[15px] tracking-[-0.02em] text-[var(--studio-text-strong)] truncate">
             Framecraft
           </span>
-          <span className="text-[var(--studio-muted-soft)] text-xs hidden sm:inline">·</span>
-          <span className="text-[12px] text-[var(--studio-muted)] hidden sm:inline">
+          <span className="text-[var(--studio-muted-soft)] text-xs hidden md:inline">·</span>
+          <span className="text-[12px] text-[var(--studio-muted)] hidden md:inline">
             Visual Design &amp; Code Studio
           </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
             onClick={() => onChangeStudioTheme(isLightTheme ? 'obsidian' : 'daylight')}
             aria-label="Toggle studio light/dark theme"
-            className="h-8 px-2.5 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] text-[12px] font-medium text-[var(--studio-text)] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+            className="h-8 px-2.5 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] text-[12px] font-medium text-[var(--studio-text)] inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
           >
             {isLightTheme ? (
               <Moon className="w-3.5 h-3.5 text-indigo-500" strokeWidth={1.5} />
             ) : (
               <Sun className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.5} />
             )}
-            <span>{isLightTheme ? 'Dark' : 'Light'}</span>
+            <span className="hidden sm:inline">{isLightTheme ? 'Dark' : 'Light'}</span>
           </button>
 
           <button
             type="button"
             onClick={onOpenShortcuts}
-            className="h-8 px-2.5 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] text-[12px] font-medium text-[var(--studio-text)] inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+            aria-label="Open keyboard shortcuts"
+            className="h-8 px-2.5 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-elevated)] hover:bg-[var(--studio-hover)] text-[12px] font-medium text-[var(--studio-text)] inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
           >
             <Keyboard className="w-3.5 h-3.5 text-[var(--studio-muted)]" strokeWidth={1.5} />
-            <span>Shortcuts</span>
+            <span className="hidden sm:inline">Shortcuts</span>
           </button>
 
           <button
             type="button"
             onClick={onResumeWorkspace}
-            className="h-8 px-3.5 rounded-[10px] bg-gradient-to-b from-indigo-500 to-indigo-700 hover:from-indigo-400 hover:to-indigo-600 text-white text-[12px] font-semibold inline-flex items-center gap-1.5 shadow-[0_8px_20px_-12px_rgba(20,163,146,0.95)] cursor-pointer transition-colors"
+            className="h-8 px-3 sm:px-3.5 rounded-[10px] bg-gradient-to-b from-indigo-500 to-indigo-700 hover:from-indigo-400 hover:to-indigo-600 text-white text-[12px] font-semibold inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap shadow-[0_8px_20px_-12px_rgba(20,163,146,0.95)] cursor-pointer transition-colors"
           >
-            <span>Open Studio</span>
+            <span className="sm:hidden">Open</span>
+            <span className="hidden sm:inline">Open Studio</span>
             <ArrowRight className="w-3.5 h-3.5" strokeWidth={1.6} />
           </button>
         </div>

@@ -187,7 +187,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search files or code..."
-            className="w-full h-7 bg-[var(--studio-input)] hover:bg-[var(--studio-hover)]/50 border border-[var(--studio-border)] rounded-md pl-7.5 pr-7 text-[12px] text-[var(--studio-text)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/60 transition-colors"
+            className="w-full h-7 bg-[var(--studio-input)] hover:bg-[var(--studio-hover)]/50 border border-[var(--studio-border)] rounded-md pl-7.5 pr-7 text-[12px] text-[var(--studio-text)] placeholder:text-[var(--studio-muted-soft)] focus:outline-none focus:border-[var(--studio-accent)] focus:ring-1 focus:ring-[var(--studio-accent)]/60 transition-colors"
           />
           {isSearching && (
             <button

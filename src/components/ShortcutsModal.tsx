@@ -5,6 +5,7 @@ import {
   type ShortcutAction,
   type ShortcutDefinition,
 } from '../utils/shortcuts';
+import { useModalFocus } from '../utils/useModalFocus';
 
 interface ShortcutsModalProps {
   open: boolean;
@@ -123,6 +124,9 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [hoveredShortcut, setHoveredShortcut] = useState<ShortcutDefinition | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus(open, panelRef);
 
   useEffect(() => {
     if (!open) return;
@@ -191,7 +195,11 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-4xl max-h-[90dvh] studio-modal-panel flex flex-col rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="w-full max-w-4xl max-h-[90dvh] studio-modal-panel flex flex-col rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden"
+      >
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-[var(--studio-border)] flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">

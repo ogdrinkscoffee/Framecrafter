@@ -15,6 +15,7 @@ import {
   type FindReplaceScopeFilter,
   searchAllProjectFiles,
 } from '../utils/globalFindReplace';
+import { useModalFocus } from '../utils/useModalFocus';
 
 interface GlobalFindReplaceModalProps {
   open: boolean;
@@ -61,6 +62,9 @@ export const GlobalFindReplaceModal: React.FC<GlobalFindReplaceModalProps> = ({
   } | null>(null);
 
   const findInputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useModalFocus(open, panelRef);
 
   useEffect(() => {
     if (!open) return;
@@ -150,7 +154,11 @@ export const GlobalFindReplaceModal: React.FC<GlobalFindReplaceModalProps> = ({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-3xl max-h-[90dvh] studio-modal-panel flex flex-col rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="w-full max-w-3xl max-h-[90dvh] studio-modal-panel flex flex-col rounded-2xl border border-[var(--studio-border-strong)] bg-[var(--studio-surface)] shadow-2xl studio-card-highlight overflow-hidden"
+      >
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-[var(--studio-border)] flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">

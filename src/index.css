@@ -429,6 +429,13 @@
   max-height: min(90dvh, calc(100dvh - 2rem));
 }
 
+/* A dialog takes focus when it opens so screen readers announce it and Tab
+   starts inside. It is not an actionable control, so it skips the accent ring
+   that every real control gets. */
+.studio-modal-panel:focus-visible {
+  outline: none;
+}
+
 /* Keyboard focus stays visible everywhere, including components that clear the
    mouse outline with focus:outline-none. */
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
